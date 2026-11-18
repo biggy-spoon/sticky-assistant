@@ -172,7 +172,13 @@ esp_err_t Init() {
     }
     s_last_activity_us = esp_timer_get_time();
 
-    gpio_set_direction(BOARD_CHARGER_EN_PIN, GPIO_MODE_INPUT_OUTPUT);
+    // GPIO39 starts out as a JTAG pin (MTCK). gpio_set_direction alone leaves it
+    // there and the level never reaches the charger, which then never charges;
+    // gpio_config routes it to the GPIO matrix first.
+    gpio_config_t charger_cfg = {};
+    charger_cfg.pin_bit_mask = 1ULL << BOARD_CHARGER_EN_PIN;
+    charger_cfg.mode = GPIO_MODE_INPUT_OUTPUT;  // output, read back for the log
+    gpio_config(&charger_cfg);
     gpio_set_level(BOARD_CHARGER_EN_PIN, 0);  // active low: charge whenever USB is present
 
     gpio_config_t usb_cfg = {};

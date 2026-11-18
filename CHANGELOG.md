@@ -143,6 +143,9 @@ tracked under Unreleased until there's a first stable cut.
   `set_todo_done`.
 
 ### Fixed
+- The battery never charged on this firmware: the charger's enable pin, GPIO39,
+  starts out as a JTAG pin, and setting only its direction left it there, so
+  the charger stayed off. It's now configured as a GPIO first.
 - The battery level: I2C controller 1 stops after its first transaction on this
   board, so the gauge is read on a bus set up fresh each time, and its first
   answer, which can be stale, is read twice.
