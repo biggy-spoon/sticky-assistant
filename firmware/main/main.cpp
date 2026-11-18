@@ -26,9 +26,21 @@ constexpr uint32_t kAssistantTaskStackWords = 6144;
 constexpr int64_t kSleepAfterIdleMs = 5 * 60 * 1000;
 constexpr uint32_t kSleepCheckMs = 5000;
 constexpr uint32_t kSleepDrawTimeoutMs = 10000;
+// A second short AI press within this long is a double press. A single press
+// waits this long before acting, to be sure no second one is coming.
+constexpr uint32_t kDoublePressWindowMs = 350;
+
+// Work for the power task, sent as notification bits. The button and timer
+// tasks have small stacks, so they hand drawing off rather than doing it.
+constexpr uint32_t kActionSinglePress = 1 << 0;
+constexpr uint32_t kActionSleepNow = 1 << 1;
 
 TaskHandle_t s_assistant_task = nullptr;
+TaskHandle_t s_power_task = nullptr;
 esp_timer_handle_t s_recording_screen_timer = nullptr;
+esp_timer_handle_t s_single_press_timer = nullptr;
+
+void SinglePressTimeout(void*) { xTaskNotify(s_power_task, kActionSinglePress, eSetBits); }
 
 void ShowRecordingScreen(void*) { ui::ShowRecording(); }
 
@@ -82,7 +94,12 @@ void OnPressEnd(button_service::ButtonId id, uint32_t held_ms, void*) {
 
     if (held_ms < kMinHoldMs || sample_count == 0) {
         device_nav::ResumeInput();
-        device_nav::OnBack();
+        if (esp_timer_is_active(s_single_press_timer)) {
+            esp_timer_stop(s_single_press_timer);
+            ui::CleanScreen();  // double press: a full refresh clears any ghosts
+        } else {
+            esp_timer_start_once(s_single_press_timer, kDoublePressWindowMs * 1000ULL);
+        }
         return;
     }
 
@@ -122,17 +139,29 @@ void AssistantTask(void*) {
     }
 }
 
-// After five minutes with no button press or touch, the current screen is drawn
-// once more with a moon in the status bar and the board goes into deep sleep.
+// Runs the AI button's single press, and sleep. After five minutes with no button
+// press or touch, or a single press on home, the current screen is drawn once
+// more with a moon and an "Asleep" banner and the board goes into deep sleep.
 // The picture stays on the e-paper. Any button wakes it, back on the same page.
-void SleepTask(void*) {
+void PowerTask(void*) {
     while (true) {
-        vTaskDelay(pdMS_TO_TICKS(kSleepCheckMs));
-        if (power_service::IdleMs() < kSleepAfterIdleMs || !device_nav::CanSleep() ||
-            ui::IsBusy()) {
+        uint32_t actions = 0;
+        xTaskNotifyWait(0, UINT32_MAX, &actions, pdMS_TO_TICKS(kSleepCheckMs));
+        if (actions & kActionSinglePress) {
+            if (!device_nav::OnBack()) {
+                actions |= kActionSleepNow;  // already home: a single press sleeps
+            }
+        }
+        const bool asked = (actions & kActionSleepNow) != 0;
+        if (!asked && power_service::IdleMs() < kSleepAfterIdleMs) {
             continue;
         }
-        ESP_LOGI(kTag, "idle for %lld s, going to sleep", power_service::IdleMs() / 1000);
+        if (!device_nav::CanSleep() || (!asked && ui::IsBusy())) {
+            continue;
+        }
+        ui::WaitIdle(kSleepDrawTimeoutMs);  // let a screen already drawing finish
+        ESP_LOGI(kTag, "going to sleep: %s",
+                 asked ? "asked to" : "idle for five minutes");
         device_nav::PrepareForSleep();
         vTaskDelay(pdMS_TO_TICKS(50));  // let the redraw get queued
         if (!ui::WaitIdle(kSleepDrawTimeoutMs)) {
@@ -180,6 +209,11 @@ extern "C" void app_main() {
     timer_args.callback = &ShowRecordingScreen;
     timer_args.name = "rec_screen";
     ESP_ERROR_CHECK(esp_timer_create(&timer_args, &s_recording_screen_timer));
+    esp_timer_create_args_t press_args = {};
+    press_args.callback = &SinglePressTimeout;
+    press_args.name = "single_press";
+    ESP_ERROR_CHECK(esp_timer_create(&press_args, &s_single_press_timer));
+    xTaskCreate(PowerTask, "power_actions", 4096, nullptr, 3, &s_power_task);
 
     xTaskCreate(AssistantTask, "assistant", kAssistantTaskStackWords, nullptr, 5,
                 &s_assistant_task);
@@ -200,8 +234,8 @@ extern "C" void app_main() {
         ESP_LOGE(kTag, "WiFi connect failed; recording will work but uploads will fail");
     }
     device_nav::Start(wifi_connected, woke);
+    vTaskDelay(pdMS_TO_TICKS(8000));
     power_service::NoteActivity();  // the five minutes count from here
 
-    xTaskCreate(SleepTask, "sleep", 4096, nullptr, 2, nullptr);
     ESP_LOGI(kTag, "ready: hold the AI button to talk; tap tiles, swipe or use Up/Down to move");
 }

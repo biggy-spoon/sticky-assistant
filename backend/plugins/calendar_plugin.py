@@ -74,7 +74,9 @@ _TOOLS = [
     },
     {
         "name": "list_calendar_events",
-        "description": "List the user's calendar events within a date range.",
+        "description": ("List the user's calendar events within a date range. Each line starts "
+                        "with the event's id in brackets, which update_calendar_event and "
+                        "delete_calendar_event need."),
         "input_schema": {
             "type": "object",
             "properties": {
@@ -84,7 +86,53 @@ _TOOLS = [
             "required": ["start_date", "end_date"],
         },
     },
+    {
+        "name": "update_calendar_event",
+        "description": ("Move, retime or rename an existing calendar event. Find its id with "
+                        "list_calendar_events first. Given only a new start, the event keeps "
+                        "its length."),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "event_id": {"type": "string", "description": "The id from list_calendar_events"},
+                "start_time": {"type": "string",
+                               "description": "New start, ISO 8601 datetime, e.g. 2027-01-13T09:20:00"},
+                "end_time": {"type": "string", "description": "New end, ISO 8601 datetime"},
+                "summary": {"type": "string", "description": "New title"},
+            },
+            "required": ["event_id"],
+        },
+    },
+    {
+        "name": "delete_calendar_event",
+        "description": ("Delete an event from the user's calendar. Find its id with "
+                        "list_calendar_events first, and only delete what the user asked to."),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "event_id": {"type": "string", "description": "The id from list_calendar_events"},
+            },
+            "required": ["event_id"],
+        },
+    },
 ]
+
+
+def _parse_time(value: str) -> datetime:
+    """A time from Claude, which usually has no timezone: read it as the user's."""
+    parsed = datetime.fromisoformat(value)
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=settings.local_timezone())
+    return parsed
+
+
+def _describe(event: calendar_service.CalendarEvent) -> str:
+    start = event.start
+    if isinstance(start, datetime) and start.tzinfo is not None:
+        start = start.astimezone(settings.local_timezone())
+    when = start.isoformat() if isinstance(start, datetime) else f"{start.isoformat()} (all day)"
+    repeats = " (repeating)" if event.recurring else ""
+    return f"[{event.uid}] {when}: {event.summary}{repeats}"
 
 
 class CalendarPlugin(Plugin):
@@ -146,9 +194,9 @@ class CalendarPlugin(Plugin):
 
         try:
             if name == "create_calendar_event":
-                start = datetime.fromisoformat(tool_input["start_time"])
+                start = _parse_time(tool_input["start_time"])
                 end_raw = tool_input.get("end_time")
-                end = datetime.fromisoformat(end_raw) if end_raw else start + timedelta(hours=1)
+                end = _parse_time(end_raw) if end_raw else start + timedelta(hours=1)
                 provider.add_event(calendar_service.CalendarEvent(
                     summary=tool_input["summary"], start=start, end=end,
                     description=tool_input.get("description", ""),
@@ -156,12 +204,29 @@ class CalendarPlugin(Plugin):
                 return f"Created '{tool_input['summary']}' at {start.isoformat()}."
 
             if name == "list_calendar_events":
-                start = datetime.fromisoformat(tool_input["start_date"])
-                end = datetime.fromisoformat(tool_input["end_date"])
+                start = _parse_time(tool_input["start_date"])
+                end = _parse_time(tool_input["end_date"])
+                if end <= start:
+                    end = start + timedelta(days=1)
                 events = provider.list_events(start, end)
                 if not events:
                     return "No events found in that range."
-                return "\n".join(f"{e.start.isoformat()}: {e.summary}" for e in events)
+                return "\n".join(_describe(e) for e in events)
+
+            if name == "update_calendar_event":
+                start_raw = tool_input.get("start_time")
+                end_raw = tool_input.get("end_time")
+                event = provider.update_event(
+                    tool_input["event_id"],
+                    start=_parse_time(start_raw) if start_raw else None,
+                    end=_parse_time(end_raw) if end_raw else None,
+                    summary=tool_input.get("summary") or None,
+                )
+                return f"Updated: {_describe(event)}"
+
+            if name == "delete_calendar_event":
+                provider.delete_event(tool_input["event_id"])
+                return f"Deleted event {tool_input['event_id']}."
 
             raise NotImplementedError(f"calendar plugin has no tool {name!r}")
         except Exception as exc:  # noqa: BLE001 -- surfaced to Claude as a tool result

@@ -11,6 +11,7 @@ view over a small JSON API.
 import io
 import logging
 import os
+import threading
 import time
 from datetime import datetime, timezone
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
@@ -45,8 +46,9 @@ SYSTEM_PROMPT_TEMPLATE = (
     "anything you aren't sure of, and give the answer itself rather than saying what you "
     "searched for. Your reply is shown as plain text on a small e-paper screen with no "
     "speaker, so keep it to 2-4 short sentences, with no markdown, lists or citations. "
-    "Today's date is {today}. When a tool is available for what the user is asking, use "
-    "it rather than just describing what you would do."
+    "Today is {today}. When a tool is available for what the user is asking, use "
+    "it rather than just describing what you would do. Earlier messages in the conversation "
+    "are the user's recent requests, so a short reply like \"yes\" answers your last question."
 )
 
 # Models that accept the newer web search tool. The model setting is free text,
@@ -65,6 +67,30 @@ def _web_search_tool(model: str) -> dict:
     billed."""
     version = "20260209" if model in _WEB_SEARCH_20260209_MODELS else "20250305"
     return {"type": f"web_search_{version}", "name": "web_search", "max_uses": 3}
+
+# Recent exchanges, so a follow-up ("yes, the 13th") makes sense. Only the text
+# of each question and answer is kept, in memory, for a few minutes.
+MEMORY_EXCHANGES = 3
+MEMORY_SECONDS = 10 * 60
+_memory: list[tuple[float, str, str]] = []
+_memory_lock = threading.Lock()
+
+
+def _recent_exchanges() -> list[dict]:
+    cutoff = time.time() - MEMORY_SECONDS
+    with _memory_lock:
+        _memory[:] = [entry for entry in _memory if entry[0] >= cutoff][-MEMORY_EXCHANGES:]
+        recent = list(_memory)
+    messages: list[dict] = []
+    for _, question, answer in recent:
+        messages.append({"role": "user", "content": question})
+        messages.append({"role": "assistant", "content": answer})
+    return messages
+
+
+def _remember(question: str, answer: str) -> None:
+    with _memory_lock:
+        _memory.append((time.time(), question, answer))
 
 app = FastAPI(title="sticky-claude backend")
 whisper_model: WhisperModel | None = None
@@ -130,6 +156,7 @@ async def converse(request: Request) -> JSONResponse:
 
     log.info("transcript=%r reply=%r", transcript, reply)
     storage.log_conversation(transcript, reply, success=True)
+    _remember(transcript, reply)
     return JSONResponse({"transcript": transcript, "reply": reply})
 
 
@@ -175,11 +202,14 @@ def _final_text(content: list) -> str:
 def _converse_with_claude(transcript: str, api_key: str, max_tool_iterations: int = 5) -> str:
     client = Anthropic(api_key=api_key)
     model = settings.get_claude_model()
-    system_prompt = SYSTEM_PROMPT_TEMPLATE.format(today=datetime.now(timezone.utc).date().isoformat())
+    now = datetime.now(settings.local_timezone())
+    system_prompt = SYSTEM_PROMPT_TEMPLATE.format(
+        today=f"{now.strftime('%A, %B %d, %Y')}, and the time is {now.strftime('%I:%M %p').lstrip('0')}"
+              f" ({settings.get_timezone_name() or 'server time'})")
     tool_defs, tool_owner = _collect_tools()
     tool_defs.append(_web_search_tool(model))
 
-    messages: list[dict] = [{"role": "user", "content": transcript}]
+    messages: list[dict] = _recent_exchanges() + [{"role": "user", "content": transcript}]
 
     for _ in range(max_tool_iterations):
         # Thinking counts towards max_tokens, so this is well above the reply length.

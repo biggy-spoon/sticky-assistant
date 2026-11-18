@@ -23,7 +23,7 @@ struct PagePos {
     int total = 0;
 };
 
-enum class TileIcon { kClaude, kCalendar, kChecklist, kGeneric };
+enum class TileIcon { kClaude, kCalendar, kChecklist, kWeather, kGeneric };
 
 struct Tile {
     std::string title;

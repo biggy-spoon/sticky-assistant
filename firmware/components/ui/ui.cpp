@@ -494,6 +494,32 @@ void ClaudeIcon(lv_obj_t* c, int cx, int cy, int s) {  // a microphone: talk to 
     Line(c, cx - 11, cy + r - 2, cx + 11, cy + r - 2, t);
 }
 
+void WeatherIcon(lv_obj_t* c, int cx, int cy, int s) {  // a sun behind a cloud
+    const int r = s / 2;
+    const int t = LV_MAX(3, s / 16);
+    const int sx = cx + r / 3;
+    const int sy = cy - r / 3;
+    for (int i = 0; i < 8; ++i) {  // rays
+        static const int kDx[] = {0, 7, 10, 7, 0, -7, -10, -7};
+        static const int kDy[] = {-10, -7, 0, 7, 10, 7, 0, -7};
+        Line(c, sx + kDx[i] * 14 / 10, sy + kDy[i] * 14 / 10, sx + kDx[i] * 19 / 10,
+             sy + kDy[i] * 19 / 10, t - 1);
+    }
+    Circle(c, sx, sy, 10);
+    Circle(c, sx, sy, 10 - t, false);
+    // The cloud: three bumps on a flat base, outlined, covering the sun.
+    const int by = cy + r / 3;
+    const int bx = cx - r + 4;
+    const int bw = s - 14;
+    FillRect(c, bx, by - 12, bw, 16, 8);
+    Circle(c, bx + bw / 4, by - 12, 10);
+    Circle(c, bx + bw / 2 + 2, by - 18, 14);
+    FillRect(c, bx + t, by - 12 + t, bw - 2 * t, 16 - 2 * t, 6, false);
+    Circle(c, bx + bw / 4, by - 12, 10 - t, false);
+    Circle(c, bx + bw / 2 + 2, by - 18, 14 - t, false);
+    FillRect(c, bx + t, by - 14, bw - 2 * t, 8, 0, false);  // clear the joins inside
+}
+
 void GenericIcon(lv_obj_t* c, int cx, int cy, int s) {
     const int r = s / 2;
     StrokeRect(c, cx - r, cy - r, s, s, 8, 3);
@@ -745,9 +771,30 @@ void UpdateTargets() {
 
 // --- presenting -------------------------------------------------------------
 
+// The last frame before sleep: a banner across the bottom, so a frozen screen
+// is never mistaken for one that's still live.
+void AddSleepBanner(lv_obj_t* screen) {
+    lv_obj_t* banner = Plain(screen);
+    lv_obj_set_size(banner, LV_SIZE_CONTENT, 44);
+    lv_obj_set_style_radius(banner, 22, 0);
+    lv_obj_set_style_bg_opa(banner, LV_OPA_COVER, 0);
+    lv_obj_set_style_bg_color(banner, lv_color_black(), 0);
+    lv_obj_set_style_border_width(banner, 3, 0);
+    lv_obj_set_style_border_color(banner, lv_color_white(), 0);
+    lv_obj_set_style_pad_hor(banner, 24, 0);
+    lv_obj_t* text = Label(banner, &sticky_bold_24, "Asleep  -  press any button to wake",
+                           LV_LABEL_LONG_CLIP);
+    lv_obj_set_style_text_color(text, lv_color_white(), 0);
+    lv_obj_center(text);
+    lv_obj_align(banner, LV_ALIGN_BOTTOM_MID, 0, -8);
+}
+
 // Loads a finished screen, frees the one it replaces, and refreshes the panel:
 // fully if it's a different page (key) from the one showing.
 void Present(lv_obj_t* screen, const std::string& key) {
+    if (s_sleeping) {
+        AddSleepBanner(screen);
+    }
     s_force_full = key != s_screen_key;
     s_screen_key = key;
     lv_obj_update_layout(screen);
@@ -848,6 +895,7 @@ void DrawTile(lv_obj_t* screen, const Tile& tile, int slot, lv_coord_t grid_top)
         case TileIcon::kClaude: ClaudeIcon(art, cx, cy, 54); break;
         case TileIcon::kCalendar: CalendarIcon(art, cx, cy, 54); break;
         case TileIcon::kChecklist: ChecklistIcon(art, cx, cy, 54); break;
+        case TileIcon::kWeather: WeatherIcon(art, cx, cy, 54); break;
         case TileIcon::kGeneric: GenericIcon(art, cx, cy, 50); break;
     }
     if (tile.badge > 0) {

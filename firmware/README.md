@@ -13,11 +13,14 @@ tile, swipe left or right, or press Up/Down to move between pages, and tap the
 status bar to go home. Swipe up or down to scroll. Tap a checkable row to toggle
 it (e.g. a todo), or a row with details to open them (e.g. a calendar event). A
 short press of the AI button goes back: from details to the list, and from any
-other page to home. On home it redraws the screen with a full refresh, which
-clears any faint traces the quick partial updates leave behind.
+other page to home. On home, a short press puts the board to sleep. A double
+press redraws the screen with a full refresh, which clears any faint traces the
+quick partial updates leave behind. A single press waits about a third of a
+second before acting, to tell it from a double press.
 
 After 5 minutes with no touch or button press, the current screen is drawn once
-more with a moon in the status bar and the board goes into deep sleep. Any
+more with a moon in the status bar and an "Asleep" banner along the bottom, and
+the board goes into deep sleep. Any
 button wakes it, back on the same page.
 
 ## Build

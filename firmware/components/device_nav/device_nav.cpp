@@ -288,6 +288,7 @@ bool PostDeviceAction(const char* plugin_id, const char* item_id, bool checked) 
 
 ui::TileIcon IconFor(const View& view) {
     if (view.view_type == "agenda") return ui::TileIcon::kCalendar;
+    if (view.plugin_id == "weather") return ui::TileIcon::kWeather;
     for (const Item& item : view.items) {
         if (item.checkable) return ui::TileIcon::kChecklist;
     }
@@ -311,7 +312,9 @@ ui::HomeInfo BuildHome() {
     for (const View& view : s_views) {
         const ui::TileIcon icon = IconFor(view);
         const int badge = icon == ui::TileIcon::kChecklist ? OpenCount(view) : 0;
-        info.tiles.push_back({view.title, icon, badge});
+        // A title like "Weather, Seattle" is too long for a tile: keep the part before the comma.
+        const std::string tile_title = view.title.substr(0, view.title.find(','));
+        info.tiles.push_back({tile_title, icon, badge});
         if (icon == ui::TileIcon::kChecklist && info.open_todos < 0) {
             info.open_todos = OpenCount(view);
         }
@@ -724,8 +727,9 @@ void OnTap(int x, int y) {
     Unlock();
 }
 
-void OnBack() {
+bool OnBack() {
     Lock();
+    bool moved = true;
     if (s_detail_row >= 0) {
         s_detail_row = -1;
         RenderCurrentLocked(true);
@@ -733,9 +737,10 @@ void OnBack() {
         s_page = kHomePage;
         RenderCurrentLocked(false);
     } else {
-        ui::CleanScreen();  // already home: give it a clean full refresh
+        moved = false;
     }
     Unlock();
+    return moved;
 }
 
 bool CanSleep() {

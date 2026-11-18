@@ -47,9 +47,9 @@ void OnScroll(int direction);
 // what's on the glass may not match the state yet.
 void OnTap(int x, int y);
 
-// A short press of the AI button: details go back to their list, any other
-// page goes home, and on home it redraws with a full refresh to clear ghosts.
-void OnBack();
+// Back: details go back to their list, and any other page goes home. False if
+// already home with nothing to go back from.
+bool OnBack();
 
 // True when nothing is in progress that sleeping would cut short.
 bool CanSleep();
