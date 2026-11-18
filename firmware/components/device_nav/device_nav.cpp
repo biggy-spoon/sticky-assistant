@@ -37,6 +37,15 @@ constexpr int kHomePage = 0;
 constexpr int kClaudePage = 1;
 constexpr int kFirstViewPage = 2;
 
+enum class RowAction { kNone, kTap, kChoose, kText };
+
+struct Option {
+    std::string value;
+    std::string label;
+
+    bool operator==(const Option&) const = default;
+};
+
 struct Item {
     std::string id;
     std::string text;
@@ -47,7 +56,9 @@ struct Item {
     int64_t start_ts = 0;
     int64_t end_ts = 0;
     bool all_day = false;
-    bool tap_action = false;  // tapping asks the plugin to act, then shows the result
+    RowAction action = RowAction::kNone;  // see DeviceViewItem.action in plugins/base.py
+    std::vector<Option> options;          // kChoose
+    std::string value;                    // kChoose: the one chosen; kText: the text
 
     bool operator==(const Item&) const = default;
 };
@@ -86,7 +97,9 @@ enum class CommandType { kRefresh, kPostAction, kRedraw };
 struct Command {
     CommandType type;
     bool checked = false;
-    bool tap = false;  // kPostAction for a tap row: no checked state, refresh after
+    bool tap = false;    // kPostAction for a tap row: no checked state, refresh after
+    bool input = false;  // kPostAction with a picked or typed value, refresh after
+    char value[96] = {};
     char plugin_id[kMaxIdLen] = {};
     char item_id[kMaxIdLen] = {};
 };
@@ -107,6 +120,13 @@ std::vector<View> s_views;
 bool s_has_fetched = false;  // distinguishes "fetched, turned out empty" from "never fetched"
 int s_page = kHomePage;
 int s_detail_row = -1;  // row whose details are open, -1 = none
+// A picker or keyboard open over the current view, by the row's id, so a
+// background refresh can't swap the row under it. Empty = none.
+std::string s_picker_id;
+std::string s_keyboard_id;
+std::string s_typed;
+bool s_caps = false;
+constexpr size_t kMaxTyped = 60;
 std::string s_transcript;
 std::string s_reply;
 std::string s_resume_page;  // a page id to open once the views arrive
@@ -195,8 +215,17 @@ int64_t JsonInt(const cJSON* object, const char* key) {
 // DeviceNavTask -- this is a blocking network call.
 bool FetchViews(std::vector<View>* out_views, Clock* out_clock) {
     // The backend only offers a font choice to firmware that has one.
-    const std::string url = BaseUrl() + "/api/device/views" +
-                            (ui::HasCustomFont() ? "?fonts=custom" : "");
+    std::string url = BaseUrl() + "/api/device/views";
+    if (ui::HasCustomFont()) {
+        url += "?fonts=custom&font_name=";
+        for (const char c : std::string(ui::CustomFontName())) {
+            if ((c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z') || (c >= '0' && c <= '9')) {
+                url += c;
+            } else if (c == ' ') {
+                url += "%20";
+            }
+        }
+    }
     ResponseBuffer response_buffer;
 
     esp_http_client_config_t config = {};
@@ -248,7 +277,17 @@ bool FetchViews(std::vector<View>* out_views, Clock* out_clock) {
             item.start_ts = JsonInt(item_json, "start_ts");
             item.end_ts = JsonInt(item_json, "end_ts");
             item.all_day = cJSON_IsTrue(cJSON_GetObjectItemCaseSensitive(item_json, "all_day"));
-            item.tap_action = JsonString(item_json, "action") == "tap";
+            const std::string action = JsonString(item_json, "action");
+            item.action = action == "tap"      ? RowAction::kTap
+                          : action == "choose" ? RowAction::kChoose
+                          : action == "text"   ? RowAction::kText
+                                               : RowAction::kNone;
+            item.value = JsonString(item_json, "value");
+            cJSON* option_json = nullptr;
+            cJSON_ArrayForEach(option_json, cJSON_GetObjectItemCaseSensitive(item_json, "options")) {
+                item.options.push_back(
+                    {JsonString(option_json, "value"), JsonString(option_json, "label")});
+            }
             view.items.push_back(std::move(item));
         }
         views.push_back(std::move(view));
@@ -283,14 +322,18 @@ bool FetchViews(std::vector<View>* out_views, Clock* out_clock) {
 
 // Sends the state the row should now have, rather than asking for a toggle, so
 // a repeated request can't flip it back. Only ever called from DeviceNavTask.
-bool PostDeviceAction(const char* plugin_id, const char* item_id, bool checked, bool tap) {
+bool PostDeviceAction(const Command& command) {
+    const char* plugin_id = command.plugin_id;
+    const char* item_id = command.item_id;
     cJSON* json = cJSON_CreateObject();
     if (json == nullptr) {
         return false;
     }
     cJSON_AddStringToObject(json, "item_id", item_id);
-    if (!tap) {
-        cJSON_AddBoolToObject(json, "checked", checked);
+    if (command.input) {
+        cJSON_AddStringToObject(json, "value", command.value);
+    } else if (!command.tap) {
+        cJSON_AddBoolToObject(json, "checked", command.checked);
     }
     char* body = cJSON_PrintUnformatted(json);
     cJSON_Delete(json);
@@ -401,6 +444,29 @@ void RenderCurrentLocked(bool keep_scroll) {
         ui::ShowDetail(item.text, item.detail, page, true);
         return;
     }
+    if (!s_picker_id.empty() || !s_keyboard_id.empty()) {
+        const std::string& id = s_picker_id.empty() ? s_keyboard_id : s_picker_id;
+        const auto found = std::find_if(view->items.begin(), view->items.end(),
+                                        [&](const Item& item) { return item.id == id; });
+        if (found != view->items.end() && !s_picker_id.empty()) {
+            std::vector<ui::ListRow> rows;
+            for (const Option& option : found->options) {
+                ui::ListRow row;
+                row.text = option.label;
+                row.radio = true;
+                row.selected = option.value == found->value;
+                rows.push_back(std::move(row));
+            }
+            ui::ShowList(found->text, rows, page, false);
+            return;
+        }
+        if (found != view->items.end()) {
+            ui::ShowKeyboard({found->text, s_typed, s_caps}, page);
+            return;
+        }
+        s_picker_id.clear();  // the row's gone
+        s_keyboard_id.clear();
+    }
     if (view->view_type == "text") {
         ui::ShowDetail(view->title, view->body, page, false);
         return;
@@ -417,8 +483,13 @@ void RenderCurrentLocked(bool keep_scroll) {
     std::vector<ui::ListRow> rows;
     rows.reserve(view->items.size());
     for (const Item& item : view->items) {
-        rows.push_back({item.text, item.secondary, item.checkable, item.checked,
-                        !item.detail.empty() || item.tap_action});
+        ui::ListRow row;
+        row.text = item.text;
+        row.secondary = item.secondary;
+        row.checkable = item.checkable;
+        row.checked = item.checked;
+        row.has_detail = !item.detail.empty() || item.action != RowAction::kNone;
+        rows.push_back(std::move(row));
     }
     ui::ShowList(view->title, rows, page, keep_scroll);
 }
@@ -436,10 +507,68 @@ void EnqueueRefreshLocked() {
     }
 }
 
+void CloseOverlaysLocked() {
+    s_detail_row = -1;
+    s_picker_id.clear();
+    s_keyboard_id.clear();
+}
+
 void MovePageLocked(int direction) {
     const int total = TotalPages();
     s_page = (s_page + direction + total) % total;
-    s_detail_row = -1;
+    CloseOverlaysLocked();
+}
+
+// Sends what was picked or typed for a row, shows it at once, and goes back
+// to the list. The refresh after the post shows what the plugin made of it.
+void SubmitInputLocked(View& view, Item& item, const std::string& value, const std::string& label) {
+    Command command = {};
+    command.type = CommandType::kPostAction;
+    command.input = true;
+    CopyBounded(command.plugin_id, sizeof(command.plugin_id), view.plugin_id);
+    CopyBounded(command.item_id, sizeof(command.item_id), item.id);
+    CopyBounded(command.value, sizeof(command.value), value);
+    if (xQueueSend(s_queue, &command, 0) != pdTRUE) {
+        ESP_LOGW(kTag, "queue full, input dropped");
+        return;
+    }
+    ++s_posts_pending;
+    item.value = value;
+    item.secondary = label;
+    s_picker_id.clear();
+    s_keyboard_id.clear();
+}
+
+void HandleKeyLocked(const std::string& key) {
+    View* view = s_page >= kFirstViewPage ? &s_views[s_page - kFirstViewPage] : nullptr;
+    auto found = view == nullptr ? std::vector<Item>::iterator()
+                                 : std::find_if(view->items.begin(), view->items.end(),
+                                                [](const Item& item) { return item.id == s_keyboard_id; });
+    if (view == nullptr || found == view->items.end()) {
+        s_keyboard_id.clear();
+        return;
+    }
+    if (key == "shift") {
+        s_caps = !s_caps;
+    } else if (key == "back") {
+        if (!s_typed.empty()) s_typed.pop_back();
+    } else if (key == "done") {
+        if (s_typed.empty()) {
+            s_keyboard_id.clear();  // nothing typed: leave it as it was
+        } else {
+            SubmitInputLocked(*view, *found, s_typed, s_typed);
+        }
+        RenderCurrentLocked(true);
+        return;
+    } else if (s_typed.size() < kMaxTyped) {
+        char c = key == "space" ? ' ' : key[0];
+        // Capitals with shift, and for the first letter of the text.
+        if (c >= 'a' && c <= 'z' && (s_caps || s_typed.empty())) {
+            c = static_cast<char>(c - 'a' + 'A');
+        }
+        s_typed.push_back(c);
+    }
+    RenderCurrentLocked(true);
 }
 
 // Moves a toggled row to where it belongs: done rows at the bottom, in the order
@@ -533,14 +662,13 @@ void HandleRefresh() {
 void HandleRedraw();
 
 void HandlePostAction(const Command& command) {
-    const bool ok = PostDeviceAction(command.plugin_id, command.item_id, command.checked,
-                                     command.tap);
+    const bool ok = PostDeviceAction(command);
     Lock();
     --s_posts_pending;
-    if (!ok || command.tap) {
-        // A failed toggle goes back to what the backend has; a tap row shows
-        // what the plugin made of it.
-        s_force_render = s_force_render || command.tap;
+    if (!ok || command.tap || command.input) {
+        // A failed toggle goes back to what the backend has; a tap, pick or
+        // typed value shows what the plugin made of it.
+        s_force_render = s_force_render || command.tap || command.input;
         EnqueueRefreshLocked();
     }
     Unlock();
@@ -721,6 +849,15 @@ void OnScroll(int direction) {
 
 void OnTap(int x, int y) {
     Lock();
+    if (!s_input_paused && !s_keyboard_id.empty()) {
+        // Keys never move, so typing is taken even while the screen catches up.
+        const int key = ui::HitTestKey(x, y);
+        if (key >= 0) {
+            HandleKeyLocked(ui::KeyAt(key));
+            Unlock();
+            return;
+        }
+    }
     if (s_input_paused || ui::IsBusy()) {
         Unlock();
         return;
@@ -730,14 +867,14 @@ void OnTap(int x, int y) {
         case ui::HitKind::kStatusBar:
             if (s_page != kHomePage || s_transient_shown) {
                 s_page = kHomePage;
-                s_detail_row = -1;
+                CloseOverlaysLocked();
                 RenderCurrentLocked(false);
             }
             break;
         case ui::HitKind::kTile:
             if (hit.index >= 0 && hit.index + 1 < TotalPages()) {
                 s_page = hit.index + 1;  // tile 0 is Claude, page 1
-                s_detail_row = -1;
+                CloseOverlaysLocked();
                 RenderCurrentLocked(false);
             }
             break;
@@ -754,8 +891,26 @@ void OnTap(int x, int y) {
                 break;
             }
             View& view = s_views[view_index];
+            if (!s_picker_id.empty()) {  // a pick from the open list
+                auto found = std::find_if(view.items.begin(), view.items.end(),
+                                          [](const Item& item) { return item.id == s_picker_id; });
+                if (found != view.items.end() && hit.index < static_cast<int>(found->options.size())) {
+                    const Option option = found->options[hit.index];
+                    SubmitInputLocked(view, *found, option.value, option.label);
+                    RenderCurrentLocked(true);
+                }
+                break;
+            }
             const Item& item = view.items[hit.index];
-            if (item.tap_action) {
+            if (item.action == RowAction::kChoose && !item.options.empty()) {
+                s_picker_id = item.id;
+                RenderCurrentLocked(false);
+            } else if (item.action == RowAction::kText) {
+                s_keyboard_id = item.id;
+                s_typed = item.value;
+                s_caps = false;
+                RenderCurrentLocked(false);
+            } else if (item.action == RowAction::kTap) {
                 Command command = {};
                 command.type = CommandType::kPostAction;
                 command.tap = true;
@@ -783,6 +938,7 @@ void OnTap(int x, int y) {
             }
             break;
         }
+        case ui::HitKind::kKey:  // handled before the busy check, above
         case ui::HitKind::kNone:
             break;
     }
@@ -792,7 +948,11 @@ void OnTap(int x, int y) {
 bool OnBack() {
     Lock();
     bool moved = true;
-    if (s_detail_row >= 0) {
+    if (!s_picker_id.empty() || !s_keyboard_id.empty()) {
+        s_picker_id.clear();  // back out without changing anything
+        s_keyboard_id.clear();
+        RenderCurrentLocked(true);
+    } else if (s_detail_row >= 0) {
         s_detail_row = -1;
         RenderCurrentLocked(true);
     } else if (s_page != kHomePage || s_transient_shown) {

@@ -1,26 +1,28 @@
-"""The Settings page: units, timezone, weather location and the device's font,
-on the device itself, and a tool so they can be changed by voice. A default
-plugin, like the calendar and the todo list.
+"""The Settings page: the AI provider and model, units, timezone, weather
+location and the device's font, on the device itself, and a tool so they can be
+changed by voice. A default plugin, like the calendar and the todo list.
 
-Tapping a row steps the setting on (units and font toggle, the timezone moves
-to the next of settings.TIMEZONE_CHOICES). The weather location needs typing,
-which the device can't do, so its row explains how to change it instead.
+Each row opens its own screen on the device: a list to pick from, or a
+keyboard for the weather location.
 """
 import logging
 from typing import Optional
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
+import ai_providers
 import settings
 from .base import DeviceView, DeviceViewItem, Plugin
 
 log = logging.getLogger("sticky-claude.plugins.settings")
 
 # What the device that's asking can do, set by app.py per request: whether its
-# firmware was built with a custom font.
+# firmware was built with a custom font, and that font's name.
 device_has_custom_font = False
+device_custom_font_name = ""
+
+_MAX_MODELS = 20  # a long list is slow to page through on e-paper
 
 _UNITS = {"imperial": "Imperial: °F, mph", "metric": "Metric: °C, km/h"}
-_FONTS = {"custom": "Your own font", "default": "Liberation Sans"}
 
 _TOOLS = [
     {
@@ -42,10 +44,31 @@ _TOOLS = [
 ]
 
 
+def _fonts() -> dict:
+    return {"custom": device_custom_font_name or "Your own font", "default": "Liberation Sans"}
+
+
 def _timezone_label(name: str) -> str:
     if not name:
         return "This server's timezone"
     return name.split("/")[-1].replace("_", " ") + f" ({name})"
+
+
+def _options(pairs) -> list[dict]:
+    return [{"value": value, "label": label} for value, label in pairs]
+
+
+def _set_weather_location(location: str) -> str:
+    """Checks the place exists first. Returns what to tell the user."""
+    from . import weather_plugin
+    try:
+        place = weather_plugin.locate(location)
+    except Exception as exc:  # noqa: BLE001 -- surfaced to the user
+        return f"Couldn't look up {location!r}: {exc}"
+    if place is None:
+        return f"Couldn't find a place called {location!r}. Nothing was changed."
+    settings.set("weather_location", location)
+    return f"weather location to {place['name']}"
 
 
 class SettingsPlugin(Plugin):
@@ -59,7 +82,7 @@ class SettingsPlugin(Plugin):
 
     @property
     def description(self) -> str:
-        return "Units, timezone, weather location and font, on the device and by voice."
+        return "The AI, units, timezone, weather location and font, on the device and by voice."
 
     def is_configured(self) -> bool:
         return True
@@ -85,53 +108,75 @@ class SettingsPlugin(Plugin):
             changed.append(f"timezone to {zone}")
         location = (tool_input.get("weather_location") or "").strip()
         if location:
-            from . import weather_plugin
-            try:
-                place = weather_plugin.locate(location)
-            except Exception as exc:  # noqa: BLE001 -- surfaced to Claude
-                return f"Couldn't look up {location!r}: {exc}"
-            if place is None:
-                return f"Couldn't find a place called {location!r}. Nothing was changed."
-            settings.set("weather_location", location)
-            changed.append(f"weather location to {place['name']}")
+            result = _set_weather_location(location)
+            if not result.startswith("weather location"):
+                return result
+            changed.append(result)
         font = tool_input.get("font")
-        if font in _FONTS:
+        if font in ("custom", "default"):
             settings.set("device_font", font)
-            changed.append(f"font to {_FONTS[font]}")
+            changed.append(f"font to {_fonts()[font]}")
         if not changed:
             return "Nothing to change."
         return "Changed " + ", ".join(changed) + ". The device shows it within a few seconds."
 
     def device_view(self) -> Optional[DeviceView]:
+        provider = settings.get_ai_provider()
+        model = settings.get_ai_model(provider)
+        try:
+            models = ai_providers.list_models(provider)[:_MAX_MODELS]
+        except Exception as exc:  # noqa: BLE001 -- the current model is still shown
+            log.warning("Couldn't list models for the settings page: %s", exc)
+            models = [model]
+        if model not in models:
+            models.insert(0, model)
+
+        zones = list(settings.TIMEZONE_CHOICES)
+        zone = settings.get_timezone_name()
+        if zone and zone not in zones:
+            zones.insert(0, zone)
         location = settings.get("weather_location", "") or ""
+
         items = [
+            DeviceViewItem(id="ai_provider", text="AI", secondary=ai_providers.PROVIDERS[provider],
+                           action="choose", value=provider,
+                           options=_options(ai_providers.PROVIDERS.items())),
+            DeviceViewItem(id="ai_model", text="Model", secondary=model, action="choose",
+                           value=model, options=_options((m, m) for m in models)),
             DeviceViewItem(id="units", text="Units", secondary=_UNITS[settings.get_units()],
-                           action="tap"),
-            DeviceViewItem(id="timezone", text="Timezone",
-                           secondary=_timezone_label(settings.get_timezone_name()), action="tap"),
-            DeviceViewItem(
-                id="location", text="Weather location", secondary=location or "Not set",
-                detail=("To change it, hold the top button and say, for example, \"Set my "
-                        "weather location to Seattle, Washington\". Or type it on the "
-                        "dashboard, under Plugins, Weather."),
-            ),
+                           action="choose", value=settings.get_units(),
+                           options=_options(_UNITS.items())),
+            DeviceViewItem(id="timezone", text="Timezone", secondary=_timezone_label(zone),
+                           action="choose", value=zone,
+                           options=_options((z, _timezone_label(z)) for z in zones)),
+            DeviceViewItem(id="weather_location", text="Weather location",
+                           secondary=location or "Not set", action="text", value=location),
         ]
         if device_has_custom_font:
             items.append(DeviceViewItem(id="font", text="Font",
-                                        secondary=_FONTS[settings.get_device_font()],
-                                        action="tap"))
+                                        secondary=_fonts()[settings.get_device_font()],
+                                        action="choose", value=settings.get_device_font(),
+                                        options=_options(_fonts().items())))
         return DeviceView(view_type="list", title="Settings", items=items)
 
-    def device_action(self, item_id: str, checked: Optional[bool]) -> None:
-        if item_id == "units":
-            settings.set("units", "metric" if settings.get_units() == "imperial" else "imperial")
-        elif item_id == "font":
-            settings.set("device_font",
-                         "default" if settings.get_device_font() == "custom" else "custom")
-        elif item_id == "timezone":
-            choices = settings.TIMEZONE_CHOICES
-            current = settings.get_timezone_name()
-            index = choices.index(current) + 1 if current in choices else 0
-            settings.set("timezone", choices[index % len(choices)])
+    def device_input(self, item_id: str, value: str) -> None:
+        value = value.strip()
+        if item_id == "ai_provider" and value in ai_providers.PROVIDERS:
+            settings.set("ai_provider", value)
+        elif item_id == "ai_model" and value:
+            settings.set_ai_model(settings.get_ai_provider(), value)
+        elif item_id == "units" and value in _UNITS:
+            settings.set("units", value)
+        elif item_id == "timezone" and value:
+            try:
+                ZoneInfo(value)
+            except (ZoneInfoNotFoundError, ValueError):
+                log.warning("device picked an unknown timezone %r", value)
+                return
+            settings.set("timezone", value)
+        elif item_id == "weather_location" and value:
+            log.info("weather location from the device: %s", _set_weather_location(value))
+        elif item_id == "font" and value in ("custom", "default"):
+            settings.set("device_font", value)
         else:
-            log.warning("device_action for unknown setting %r", item_id)
+            log.warning("device_input for %r with %r ignored", item_id, value)

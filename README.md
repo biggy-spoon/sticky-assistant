@@ -35,8 +35,13 @@ calendar and it actually will.
 - **Weather**: the current conditions on the home screen and a 7-day forecast
   page where tapping a day shows its hours, from
   [Open-Meteo](https://open-meteo.com) (free, no API key).
-- **Settings on the device**: units, timezone, weather location and font, also
-  on the dashboard and changeable by voice ("switch to metric").
+- **Your choice of AI**: Claude by default, or Gemini, OpenAI, or anything that
+  offers an OpenAI-compatible API (OpenRouter, Ollama, LM Studio and others).
+  Web search works with Claude only.
+- **Settings on the device**: AI provider and model, units, timezone, weather
+  location and font, each on its own screen: a list to pick from, or an
+  on-screen keyboard for the location. Also on the dashboard, and changeable by
+  voice ("switch to metric").
 - **A calendar Claude can edit**: "move my dentist appointment to Friday at 3"
   moves it; events can also be renamed or deleted.
 - **Follow-up questions**: the last few exchanges are remembered for ten

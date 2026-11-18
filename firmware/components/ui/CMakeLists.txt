@@ -7,8 +7,13 @@ foreach(size ${font_sizes})
     list(APPEND font_srcs "fonts/sticky_${size}.c")
 endforeach()
 set(has_custom 0)
+set(custom_name "Your own font")
 if(EXISTS "${CMAKE_CURRENT_LIST_DIR}/fonts/custom/custom_sans_24.c")
     set(has_custom 1)
+    if(EXISTS "${CMAKE_CURRENT_LIST_DIR}/fonts/custom/name.txt")
+        file(READ "${CMAKE_CURRENT_LIST_DIR}/fonts/custom/name.txt" custom_name)
+        string(STRIP "${custom_name}" custom_name)
+    endif()
     foreach(size ${font_sizes})
         list(APPEND font_srcs "fonts/custom/custom_${size}.c")
     endforeach()
@@ -20,4 +25,5 @@ idf_component_register(
     INCLUDE_DIRS "include"
     REQUIRES lvgl board epaper_display esp_timer esp_wifi heap freertos power_service
 )
-target_compile_definitions(${COMPONENT_LIB} PUBLIC STICKY_HAS_CUSTOM_FONT=${has_custom})
+target_compile_definitions(${COMPONENT_LIB} PUBLIC STICKY_HAS_CUSTOM_FONT=${has_custom}
+                           "STICKY_CUSTOM_FONT_NAME=\"${custom_name}\"")

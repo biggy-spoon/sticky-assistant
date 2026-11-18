@@ -4,6 +4,7 @@
 
 #include <atomic>
 #include <cstdio>
+#include <cstring>
 #include <ctime>
 #include <functional>
 #include <utility>
@@ -136,6 +137,7 @@ std::vector<void*> s_screen_buffers;    // canvas buffers of the screen on the g
 std::vector<void*> s_building_buffers;  // ... and of the one being built
 std::vector<PendingTarget> s_pending_targets;
 int s_total_pages = 0;
+std::atomic<bool> s_keyboard_shown{false};  // read by the touch task's key hit test
 
 struct Bar {
     lv_obj_t* time = nullptr;
@@ -939,6 +941,7 @@ void AddSleepBanner(lv_obj_t* screen) {
 // Loads a finished screen, frees the one it replaces, and refreshes the panel:
 // fully if it's a different page (key) from the one showing.
 void Present(lv_obj_t* screen, const std::string& key) {
+    s_keyboard_shown = false;
     if (s_sleeping) {
         AddSleepBanner(screen);
     }
@@ -1183,7 +1186,21 @@ void AddListRow(lv_obj_t* area, const ListRow& row, int index) {
     lv_obj_set_style_border_color(obj, lv_color_black(), 0);
     AddTarget(obj, HitKind::kRow, index);
 
-    if (row.checkable) {
+    if (row.radio) {
+        lv_obj_t* ring = Plain(obj);
+        lv_obj_set_size(ring, 28, 28);
+        lv_obj_set_style_radius(ring, LV_RADIUS_CIRCLE, 0);
+        lv_obj_set_style_border_width(ring, 2, 0);
+        lv_obj_set_style_border_color(ring, lv_color_black(), 0);
+        if (row.selected) {
+            lv_obj_t* dot = Plain(ring);
+            lv_obj_set_size(dot, 14, 14);
+            lv_obj_set_style_radius(dot, LV_RADIUS_CIRCLE, 0);
+            lv_obj_set_style_bg_opa(dot, LV_OPA_COVER, 0);
+            lv_obj_set_style_bg_color(dot, lv_color_black(), 0);
+            lv_obj_center(dot);
+        }
+    } else if (row.checkable) {
         lv_obj_t* box = Plain(obj);
         lv_obj_set_size(box, 28, 28);
         lv_obj_set_style_radius(box, 4, 0);
@@ -1211,7 +1228,8 @@ void AddListRow(lv_obj_t* area, const ListRow& row, int index) {
     lv_obj_set_flex_flow(column, LV_FLEX_FLOW_COLUMN);
     lv_obj_set_style_pad_row(column, 2, 0);
     // Open items stand out in bold; finished ones go plain and struck through.
-    const bool bold = row.checkable && !row.checked;
+    // In a list of choices, the chosen one is bold.
+    const bool bold = (row.checkable && !row.checked) || (row.radio && row.selected);
     lv_obj_t* text = Label(column, bold ? g_fonts->bold_24 : g_fonts->sans_24, row.text);
     lv_obj_set_width(text, lv_pct(100));
     if (row.checked) {
@@ -1496,6 +1514,94 @@ void RenderDetail(const std::string& title, const std::string& body, PagePos pag
     Present(screen, "detail:" + title);
 }
 
+// --- keyboard ------------------------------------------------------------------------
+
+struct Key {
+    const char* value;  // what it types, or a command
+    const char* label;
+    int width;          // in key units
+};
+
+// Five rows of ten units: digits, the three letter rows (with shift and
+// backspace on the last), then space, a full stop and Done.
+const Key kKeys[] = {
+    {"1", "1", 1}, {"2", "2", 1}, {"3", "3", 1}, {"4", "4", 1}, {"5", "5", 1},
+    {"6", "6", 1}, {"7", "7", 1}, {"8", "8", 1}, {"9", "9", 1}, {"0", "0", 1},
+    {"q", "q", 1}, {"w", "w", 1}, {"e", "e", 1}, {"r", "r", 1}, {"t", "t", 1},
+    {"y", "y", 1}, {"u", "u", 1}, {"i", "i", 1}, {"o", "o", 1}, {"p", "p", 1},
+    {"a", "a", 1}, {"s", "s", 1}, {"d", "d", 1}, {"f", "f", 1}, {"g", "g", 1},
+    {"h", "h", 1}, {"j", "j", 1}, {"k", "k", 1}, {"l", "l", 1}, {"-", "-", 1},
+    {"shift", "Aa", 1}, {"z", "z", 1}, {"x", "x", 1}, {"c", "c", 1}, {"v", "v", 1},
+    {"b", "b", 1}, {"n", "n", 1}, {"m", "m", 1}, {",", ",", 1}, {"back", LV_SYMBOL_LEFT, 1},
+    {"space", "space", 6}, {".", ".", 1}, {"done", "Done", 3},
+};
+constexpr int kKeyCount = sizeof(kKeys) / sizeof(kKeys[0]);
+constexpr lv_coord_t kKeyGap = 6;
+constexpr lv_coord_t kKeyUnit = (kW - 2 * 12 - 9 * kKeyGap) / 10;
+constexpr lv_coord_t kKeyHeight = 54;
+constexpr lv_coord_t kKeysTop = kBarH + 86;
+
+Rect KeyRect(int index) {
+    int row = 0;
+    int unit = 0;  // position within the row, in key units
+    for (int i = 0; i < index; ++i) {
+        unit += kKeys[i].width;
+        if (unit >= 10) {
+            unit = 0;
+            ++row;
+        }
+    }
+    const lv_coord_t x = 12 + unit * (kKeyUnit + kKeyGap);
+    const lv_coord_t y = kKeysTop + row * (kKeyHeight + kKeyGap);
+    const lv_coord_t w = kKeys[index].width * kKeyUnit + (kKeys[index].width - 1) * kKeyGap;
+    return {x, y, static_cast<lv_coord_t>(x + w - 1), static_cast<lv_coord_t>(y + kKeyHeight - 1)};
+}
+
+void RenderKeyboard(const KeyboardInfo& info, PagePos page) {
+    s_total_pages = page.total;
+    lv_obj_t* screen = NewScreen();
+    BuildBar(screen, info.title, true, page);
+
+    lv_obj_t* field = Plain(screen);
+    lv_obj_set_pos(field, 12, kBarH + 14);
+    lv_obj_set_size(field, kW - 24, 60);
+    lv_obj_set_style_radius(field, 8, 0);
+    lv_obj_set_style_border_width(field, 2, 0);
+    lv_obj_set_style_border_color(field, lv_color_black(), 0);
+    lv_obj_set_style_pad_hor(field, 14, 0);
+    lv_obj_t* text = Label(field, g_fonts->sans_24, SanitizeText(info.text) + "|", LV_LABEL_LONG_DOT,
+                           kW - 24 - 28);
+    lv_obj_align(text, LV_ALIGN_LEFT_MID, 0, 0);
+
+    for (int i = 0; i < kKeyCount; ++i) {
+        const Rect r = KeyRect(i);
+        lv_obj_t* key = Plain(screen);
+        lv_obj_set_pos(key, r.x1, r.y1);
+        lv_obj_set_size(key, r.x2 - r.x1 + 1, r.y2 - r.y1 + 1);
+        lv_obj_set_style_radius(key, 8, 0);
+        lv_obj_set_style_border_width(key, 2, 0);
+        lv_obj_set_style_border_color(key, lv_color_black(), 0);
+        const bool command = strlen(kKeys[i].value) > 1;
+        const bool lit = strcmp(kKeys[i].value, "shift") == 0 && info.caps;
+        if (strcmp(kKeys[i].value, "done") == 0 || lit) {
+            lv_obj_set_style_bg_opa(key, LV_OPA_COVER, 0);
+            lv_obj_set_style_bg_color(key, lv_color_black(), 0);
+        }
+        std::string label = kKeys[i].label;
+        if (!command && info.caps && label[0] >= 'a' && label[0] <= 'z') {
+            label[0] = static_cast<char>(label[0] - 'a' + 'A');
+        }
+        lv_obj_t* text_label = Label(key, command ? g_fonts->sans_18 : g_fonts->bold_24, label,
+                                     LV_LABEL_LONG_CLIP);
+        if (strcmp(kKeys[i].value, "done") == 0 || lit) {
+            lv_obj_set_style_text_color(text_label, lv_color_white(), 0);
+        }
+        lv_obj_center(text_label);
+    }
+    Present(screen, "keyboard:" + info.title);
+    s_keyboard_shown = true;
+}
+
 // --- the UI task ----------------------------------------------------------------
 
 void TickTimerCallback(void*) { lv_tick_inc(kTickPeriodMs); }
@@ -1658,6 +1764,8 @@ void SetSleeping(bool sleeping) { s_sleeping = sleeping; }
 
 bool HasCustomFont() { return STICKY_HAS_CUSTOM_FONT != 0; }
 
+const char* CustomFontName() { return STICKY_CUSTOM_FONT_NAME; }
+
 bool UseCustomFont(bool custom) {
 #if STICKY_HAS_CUSTOM_FONT
     const FontSet* wanted = custom ? &kCustomFonts : &kDefaultFonts;
@@ -1734,6 +1842,27 @@ void CleanScreen() {
         lv_refr_now(nullptr);
         s_force_full = false;
     });
+}
+
+void ShowKeyboard(const KeyboardInfo& info, PagePos page) {
+    Post([info, page] { RenderKeyboard(info, page); });
+}
+
+const char* KeyAt(int index) {
+    return index >= 0 && index < kKeyCount ? kKeys[index].value : "";
+}
+
+int HitTestKey(int x, int y) {
+    if (!s_keyboard_shown) {
+        return -1;
+    }
+    for (int i = 0; i < kKeyCount; ++i) {
+        const Rect r = KeyRect(i);
+        if (x >= r.x1 && x <= r.x2 && y >= r.y1 && y <= r.y2) {
+            return i;
+        }
+    }
+    return -1;
 }
 
 void Scroll(int direction) {

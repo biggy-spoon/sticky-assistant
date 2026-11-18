@@ -79,8 +79,9 @@ tools/make_fonts.sh ~/Fonts/MyFont-Regular.ttf ~/Fonts/MyFont-Bold.ttf
 idf.py build flash
 ```
 
-It writes the UI's seven sizes to `components/ui/fonts/custom/`, and the build
-uses them whenever that folder exists. The folder is ignored by git, so a font
+It writes the UI's seven sizes to `components/ui/fonts/custom/`, with the font's
+name (from the file name) in `name.txt` for the Settings page's font picker, and
+the build uses them whenever that folder exists. The folder is ignored by git, so a font
 licensed only for your own devices never ends up in the repository. Delete the
 folder to go back to Liberation Sans. Icons and drawings are shapes, not
 characters, so they don't change. It needs Node.js for `npx lv_font_conv`, and

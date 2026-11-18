@@ -118,8 +118,19 @@ tracked under Unreleased until there's a first stable cut.
   sleeps. A sleeping screen shows an "Asleep" banner.
 - Custom fonts: `firmware/tools/make_fonts.sh` builds your own TrueType font
   into a git-ignored folder, and the device's Settings page switches to it.
+- AI providers: Claude, Gemini, or any OpenAI-compatible API, chosen on the
+  dashboard or the device, each with its own key and model. The model list
+  comes from the provider. New `ai_providers.py`; `GET /api/ai/models`.
+- Picker screens on the device for the AI provider, model, units, timezone and
+  font, and an on-screen keyboard for the weather location. Plugin items can
+  carry `action: "choose"` with `options`, or `action: "text"`, answered
+  through the new `Plugin.device_input(item_id, value)`.
+- The battery log shows the current, the gauge's flags and the charger pin, to
+  confirm charging.
 
 ### Changed
+- `/converse` transcribes and asks the model on a worker thread, so the device
+  and dashboard can still reach the backend while a reply is being worked out.
 - Page changes and scrolling use a full e-paper refresh, since partial refreshes
   of a whole new page ghosted badly. Partial refreshes, with a second pass that
   darkens text, are kept for updates within a screen.

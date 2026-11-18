@@ -22,7 +22,9 @@ constexpr uint32_t kReadIntervalMs = 30 * 1000;
 constexpr uint32_t kI2cHz = 100000;
 constexpr int kI2cTimeoutMs = 100;
 constexpr uint8_t kGaugeStateOfCharge = 0x2C;  // BQ27220 standard commands: percent
-constexpr uint8_t kGaugeVoltage = 0x08;        // ... and millivolts
+constexpr uint8_t kGaugeVoltage = 0x08;        // ... millivolts
+constexpr uint8_t kGaugeCurrent = 0x0C;        // ... milliamps, positive while charging
+constexpr uint8_t kGaugeBatteryStatus = 0x0A;  // ... and flags; bit 0 (DSG) set while discharging
 // The gauge misses the odd request. The last good reading stands until this
 // many in a row fail, so one hiccup doesn't blank the status bar.
 constexpr int kFailuresBeforeUnknown = 4;
@@ -45,7 +47,7 @@ void HoldAt(gpio_num_t pin, int level) {
 // I2C controller 1 stops working after its first transaction on this board
 // (every device on the bus then times out, with both lines idle high), so each
 // reading sets the bus up fresh and takes it down again.
-bool ReadGauge(int* percent, int* millivolts) {
+bool ReadGauge(int* percent, int* millivolts, int* milliamps, int* flags) {
     i2c_master_bus_config_t bus_cfg = {};
     bus_cfg.i2c_port = I2C_NUM_1;  // the touch panel has I2C_NUM_0
     bus_cfg.sda_io_num = BOARD_SENSOR_I2C_SDA_PIN;
@@ -78,6 +80,16 @@ bool ReadGauge(int* percent, int* millivolts) {
         err = i2c_master_transmit_receive(gauge, &kGaugeVoltage, 1, volts, sizeof(volts),
                                           kI2cTimeoutMs);
     }
+    uint8_t amps[2] = {};
+    if (err == ESP_OK) {
+        err = i2c_master_transmit_receive(gauge, &kGaugeCurrent, 1, amps, sizeof(amps),
+                                          kI2cTimeoutMs);
+    }
+    uint8_t status[2] = {};
+    if (err == ESP_OK) {
+        err = i2c_master_transmit_receive(gauge, &kGaugeBatteryStatus, 1, status, sizeof(status),
+                                          kI2cTimeoutMs);
+    }
     if (gauge != nullptr) {
         i2c_master_bus_rm_device(gauge);
     }
@@ -93,19 +105,29 @@ bool ReadGauge(int* percent, int* millivolts) {
     }
     *percent = value;
     *millivolts = volts[0] | (volts[1] << 8);
+    *milliamps = static_cast<int16_t>(amps[0] | (amps[1] << 8));
+    *flags = status[0] | (status[1] << 8);
     return true;
 }
 
 void ReadStatus() {
     int percent = 0;
     int millivolts = 0;
-    const bool read = ReadGauge(&percent, &millivolts);
+    int milliamps = 0;
+    int flags = 0;
+    const bool read = ReadGauge(&percent, &millivolts, &milliamps, &flags);
     xSemaphoreTake(s_lock, portMAX_DELAY);
     s_status.usb_power = gpio_get_level(BOARD_USB_POWER_PIN) == 1;
     if (read) {
-        if (percent != s_status.percent || !s_status.battery_known) {
-            ESP_LOGI(kTag, "battery %d%% at %d mV", percent, millivolts);
+        const bool charging = milliamps > 0;
+        if (percent != s_status.percent || !s_status.battery_known || charging != s_status.charging) {
+            // The charger pin level and the gauge's flags, to see why it isn't
+            // charging when USB power is there.
+            ESP_LOGI(kTag, "battery %d%% at %d mV, %d mA (%s), gauge flags 0x%04x, charger pin %d",
+                     percent, millivolts, milliamps, charging ? "charging" : "not charging", flags,
+                     gpio_get_level(BOARD_CHARGER_EN_PIN));
         }
+        s_status.charging = charging;
         s_failures = 0;
         s_status.battery_known = true;
         s_status.percent = percent;

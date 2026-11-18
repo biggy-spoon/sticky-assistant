@@ -59,9 +59,17 @@ class DeviceViewItem:
     start_ts: int = 0
     end_ts: int = 0
     all_day: bool = False
-    # "tap": tapping the row calls device_action(id, None), and the device then
-    # fetches the view again to show the result (e.g. a setting stepping on).
+    # What tapping the row does, beyond toggling a checkable row or opening
+    # `detail`:
+    #   "tap":    calls device_action(id, None).
+    #   "choose": opens a screen listing `options`, with `value` marked; the
+    #             one picked goes to device_input(id, value).
+    #   "text":   opens a keyboard starting from `value`; what's typed goes to
+    #             device_input(id, text).
+    # The device then fetches the view again to show the result.
     action: str = ""
+    options: Optional[list[dict]] = None  # for "choose": [{"value": ..., "label": ...}]
+    value: str = ""
 
 
 @dataclass
@@ -141,4 +149,9 @@ class Plugin(ABC):
         DeviceViewItem.id. For a checkable row, `checked` is the state it should
         now have. For a row with action="tap", it's None. Default: no-op, for a
         plugin whose device screen is read-only."""
+        return None
+
+    def device_input(self, item_id: str, value: str) -> None:
+        """Optional: what the user picked (action="choose") or typed
+        (action="text") for one of this plugin's device rows. Default: no-op."""
         return None

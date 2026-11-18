@@ -149,6 +149,16 @@ repository is MIT.
   Overview tab), falling back to the older `todo_timezone`, then the server's
   timezone. The same timezone sets the device's clock: `GET
   /api/device/views` returns `clock: {now, utc_offset}` alongside the views.
+- `ai_providers.py` — the model behind the assistant. Claude goes through
+  Anthropic's Messages API (with web search); Gemini, OpenAI and anything
+  OpenAI-compatible go through one chat-completions client over `requests`,
+  which converts the plugins' Anthropic-format tool definitions. Each provider
+  keeps its own key and model in settings.
+- Device rows can open screens of their own: `action: "choose"` lists
+  `options` to pick from, and `action: "text"` opens an on-screen keyboard. The
+  answer reaches the plugin through `device_input(item_id, value)` (a POST to
+  the device-action route with `value`). The keyboard's keys never move, so the
+  firmware takes key taps even while a refresh is running.
 - Web search isn't a plugin. `app.py` adds Anthropic's server-side tool to every
   request, so Anthropic runs it and the results come back in the same response.
   It uses `web_search_20260209` on models known to accept it and
