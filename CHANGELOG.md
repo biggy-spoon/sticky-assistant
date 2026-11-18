@@ -135,6 +135,10 @@ tracked under Unreleased until there's a first stable cut.
   browser. It adds the device's own settings (backend address, WiFi, sleep
   timeout, including never), and keeps the device awake while it's open. The
   backend no longer serves a dashboard; `/dashboard` redirects to the device.
+- A home page setting (Settings > Home page): the widgets, the assistant, or a
+  plugin's page such as the calendar. The device starts on it, a short AI press
+  goes back to it (and sleeps when already there), and tapping the status bar
+  goes to it, then on to the widgets, which stay in the page rotation.
 - Pages are ready at once: the backend builds each plugin's device screen in
   the background and serves the latest copy (about 0.3s instead of 4-12s,
   since the calendar asked iCloud on every request), and the device keeps the

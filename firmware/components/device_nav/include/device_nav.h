@@ -52,8 +52,9 @@ void OnScroll(int direction);
 // what's on the glass may not match the state yet.
 void OnTap(int x, int y);
 
-// Back: details go back to their list, and any other page goes home. False if
-// already home with nothing to go back from.
+// Back: details go back to their list, and any other page goes to the home page
+// (Settings > Home page: the widgets, or e.g. the calendar). False if already
+// there with nothing to go back from.
 bool OnBack();
 
 // True when nothing is in progress that sleeping would cut short.

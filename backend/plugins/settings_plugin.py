@@ -160,6 +160,7 @@ class SettingsPlugin(Plugin):
             DeviceViewItem(id="weather_location", text="Weather location",
                            secondary=location or "Not set", action="text", value=location),
         ]
+        items.append(self._home_page_row())
         items.append(self._plugins_row())
         address = storage.get_device_status().get("last_ip")
         items.append(DeviceViewItem(
@@ -176,6 +177,20 @@ class SettingsPlugin(Plugin):
                                         action="choose", value=settings.get_device_font(),
                                         options=_options(_fonts().items())))
         return DeviceView(view_type="list", title="Settings", items=items)
+
+    def _home_page_row(self) -> DeviceViewItem:
+        """Which page the device starts on and goes back to. The widgets stay
+        in the page rotation whatever this is."""
+        options = [{"value": "home", "label": "Widgets: clock, next event, weather"},
+                   {"value": "claude", "label": ai_providers.assistant_name()}]
+        for plugin in plugins.all_plugins():
+            if plugin.id != "settings" and plugin.is_configured() and \
+                    type(plugin).device_view is not Plugin.device_view:
+                options.append({"value": plugin.id, "label": plugin.name})
+        current = settings.get_home_page()
+        label = next((o["label"] for o in options if o["value"] == current), "Widgets")
+        return DeviceViewItem(id="home_page", text="Home page", secondary=label.split(":")[0],
+                              action="choose", value=current, options=options)
 
     def _plugins_row(self) -> DeviceViewItem:
         """The installed plugins, and the hub's reviewed ones to install."""
@@ -194,6 +209,11 @@ class SettingsPlugin(Plugin):
             action="choose", value="", options=options)
 
     def device_input(self, item_id: str, value: str) -> None:
+        if item_id == "home_page":
+            known = {"home", "claude"} | {plugin.id for plugin in plugins.all_plugins()}
+            if value in known:
+                settings.set("home_page", value)
+            return
         if item_id == "plugins":
             if value.startswith("install:"):
                 try:

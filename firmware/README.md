@@ -13,7 +13,9 @@ tile, swipe left or right, or press Up/Down to move between pages, and tap the
 status bar to go home. Swipe up or down to scroll. Tap a checkable row to toggle
 it (e.g. a todo), or a row with details to open them (e.g. a calendar event). A
 short press of the AI button goes back: from details to the list, and from any
-other page to home. On home, a short press puts the board to sleep. A double
+other page to the home page. The home page is the widgets unless Settings >
+Home page picks another, such as the calendar; the widgets then stay one swipe
+away, and tapping the status bar on the home page goes to them. On home, a short press puts the board to sleep. A double
 press redraws the screen with a full refresh, which clears any faint traces the
 quick partial updates leave behind. A single press waits about a third of a
 second before acting, to tell it from a double press.

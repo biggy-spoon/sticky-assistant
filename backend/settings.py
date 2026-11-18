@@ -124,6 +124,12 @@ def get_device_font() -> str:
     return value if value in ("custom", "default") else "custom"
 
 
+def get_home_page() -> str:
+    """The device's home page: "home" (the widgets), "claude" (the assistant),
+    or a plugin id such as "calendar"."""
+    return get("home_page", "") or "home"
+
+
 # Timezones the device's Settings page steps through, in order. Any other
 # IANA name can be typed on the dashboard.
 TIMEZONE_CHOICES = [

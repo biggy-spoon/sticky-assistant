@@ -386,7 +386,7 @@ def api_device_views(fonts: str = "", font_name: str = "") -> dict:
     offset = datetime.fromtimestamp(now, settings.local_timezone()).utcoffset()
     result = {"views": views,
               "clock": {"now": int(now), "utc_offset": int(offset.total_seconds()) if offset else 0},
-              "device": {"font": settings.get_device_font()},
+              "device": {"font": settings.get_device_font(), "home_page": settings.get_home_page()},
               "assistant": {"name": ai_providers.assistant_name(),
                             "model": settings.get_ai_model(settings.get_ai_provider())}}
     weather = plugins.get("weather")
