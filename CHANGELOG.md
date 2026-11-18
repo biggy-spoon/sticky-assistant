@@ -8,6 +8,11 @@ tracked under Unreleased until there's a first stable cut.
 
 ## [Unreleased]
 
+### Changed
+- The whole project is MIT, binaries included: the e-paper driver, which was
+  ported from the GPLv3 `folloup-sticky`, is rewritten on the MIT SSD1677
+  driver from Sticky OS. Same speed and picture, tested on the device.
+
 ### Added
 - Project scaffold: ESP-IDF firmware for the reTerminal Sticky (button,
   PDM mic, WiFi, ePaper SPI driver, HTTP client) and a FastAPI backend

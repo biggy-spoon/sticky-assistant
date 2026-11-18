@@ -123,14 +123,9 @@ A serif or wider font takes more room, so check long titles after switching.
 
 ## Licensing note
 
-The partial refresh, panel sleep and power-off sequences in `epaper_display`,
-the deep sleep sequence in `power_service` and the battery pins in `board` are
+The controller sequences in `epaper_display` (init, full and partial refresh,
+power-off and sleep), the deep sleep sequence in `power_service` and the battery pins in `board` are
 adapted from [Sticky OS](https://github.com/Sticky-OS/sticky-os) and the
 SSD1677 driver it vendors, both MIT. `components/ui/fonts` is Liberation Sans
 under the SIL Open Font License (`OFL-LiberationSans.txt` there).
-
-`components/epaper_display` is **GPLv3**, not MIT like the rest of this
-repository — its SSD1677 command sequence is ported from the GPLv3
-[`folloup-sticky`](https://github.com/alxv2016/folloup-sticky) project.
-See that directory's own `LICENSE` file, and `docs/ARCHITECTURE.md` for
-why a from-scratch version didn't work.
+Sticky OS's license notice is in `components/epaper_display/LICENSE-sticky-os`.

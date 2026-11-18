@@ -60,20 +60,18 @@ See `backend/README.md` for calendar setup and the dashboard.
   useful context for reviewers).
 - Keep commits focused. A PR that fixes one thing is easier to review
   than one that fixes a bug and reorganizes three files along the way.
-- If you're porting or adapting code from another project (the way this
-  repo's ePaper driver was ported from `folloup-sticky`), say so and note
-  the license implications -- see the "Licensing" section below.
+- If you're porting or adapting code from another project (the way the
+  ePaper driver follows Sticky OS's MIT driver), say so and note the license
+  implications -- see the "Licensing" section below.
 
 ## Licensing
 
-This repository is MIT-licensed, **except**
-`firmware/components/epaper_display/`, which is GPLv3 because its SSD1677
-command sequence is ported from the GPLv3-licensed
-[`folloup-sticky`](https://github.com/alxv2016/folloup-sticky) project. If
-you contribute code derived from another GPL project, the derived file(s)
-need to carry that license too -- don't silently relicense someone else's
-work. If you're not sure whether something counts as "derived," ask in
-the PR.
+This repository is MIT-licensed throughout, and the firmware binaries built
+from it are published as MIT (for example on the Seeed Sticky Playground), so
+it needs to stay that way. Code adapted from MIT, BSD or Apache projects is
+welcome with its notice kept. Code derived from a GPL (or other copyleft)
+project can't be accepted, because it would make every binary GPL. If you're
+not sure whether something counts as "derived," ask in the PR.
 
 ## Code style
 

@@ -2,7 +2,6 @@
 
 [![CI](https://github.com/biggy-spoon/sticky-assistant/actions/workflows/ci.yml/badge.svg)](https://github.com/biggy-spoon/sticky-assistant/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
-[![Firmware license: GPLv3](https://img.shields.io/badge/firmware%2Fepaper_display-GPLv3-orange.svg)](firmware/components/epaper_display/LICENSE)
 
 A push-to-talk voice assistant on a [Seeed Studio reTerminal Sticky](https://www.seeedstudio.com/sticky/),
 proxied through your own always-on server to the AI of your choice: Claude by
@@ -151,24 +150,22 @@ See [`CONTRIBUTING.md`](CONTRIBUTING.md). This project follows the
 
 ## License
 
-MIT (see [`LICENSE`](LICENSE)), **except**
-`firmware/components/epaper_display/`, which is GPLv3 — its SSD1677
-command sequence is ported from the GPLv3-licensed
-[`folloup-sticky`](https://github.com/alxv2016/folloup-sticky) project
-(confirmed working on the same board/panel). See that directory's own
-`LICENSE` file.
+MIT (see [`LICENSE`](LICENSE)), firmware and backend alike. The e-paper
+driver follows the MIT-licensed SSD1677 driver from Sticky OS, whose notice is
+in `firmware/components/epaper_display/LICENSE-sticky-os`. The fonts are
+under the SIL Open Font License.
 
 ## Acknowledgments
 
 - [Sticky OS](https://github.com/Sticky-OS/sticky-os) (MIT) — the on-device
   interface follows its design, and the partial refresh, sleep sequence and
-  battery pins are adapted from it and the SSD1677 driver it vendors (MIT,
-  Copyright (c) 2026 limengdu).
+  battery pins are adapted from it, and the e-paper driver follows the SSD1677
+  driver it vendors by limengdu (MIT, Copyright (c) 2026 The Sticky OS
+  contributors).
 - [Liberation Sans](https://github.com/liberationfonts/liberation-fonts) — the
   device's typeface, under the SIL Open Font License
   (`firmware/components/ui/fonts/OFL-LiberationSans.txt`).
 - [`folloup-sticky`](https://github.com/alxv2016/folloup-sticky) by
-  alxv2016 — the reference this project's board pin map and ePaper
-  driver are built from/ported from.
+  alxv2016 — the reference the board pin map was checked against.
 - [Seeed Studio](https://www.seeedstudio.com/) for the reTerminal Sticky
   hardware.

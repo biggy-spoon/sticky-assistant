@@ -90,21 +90,24 @@ thresholds each pixel's brightness into `epaper_display::SetPixel`.
 e-paper refresh (a few seconds) — there's no partial-refresh support, and
 screens only update on explicit state changes, never animated.
 
-## The ePaper driver, and why it's GPLv3
+## The ePaper driver
 
-The SSD1677 init/refresh command sequence in
-`firmware/components/epaper_display` is ported from the `folloup-sticky`
-project's `ssd1677_driver.cpp` (GPLv3), after a from-scratch version
-(written from generic SSD16xx recollection, not a datasheet) compiled and
-ran without error but never produced a visible update once real content
-replaced an early solid-block test. The proven sequence writes to *both*
-the SSD1677's "new" and "old" RAM planes (this controller computes its
-waveform from the difference between them), includes a booster
-soft-start sequence and a Display Update Control 1 command the
-from-scratch version omitted entirely, and addresses its RAM X window in
-pixels rather than bytes. Because it's a port of GPLv3 code, that one
-directory is GPLv3 (see its own `LICENSE` file) while the rest of this
-repository is MIT.
+`firmware/components/epaper_display` drives the SSD1677 with the sequences of
+the MIT-licensed driver by limengdu that Sticky OS vendors (its notice is in
+`LICENSE-sticky-os` there). Two things about this controller matter:
+
+- It keeps two RAM planes, the image to show and the one showing, and drives
+  the difference. A full refresh writes the new image to both; a partial one
+  writes what's on the glass as the "previous" plane, so only changed pixels
+  move. Writing one plane alone leaves the other stale, and nothing changes.
+- The fast partial waveform leaves black pixels grey, so each partial refresh
+  is followed by a second pass with an all-white previous plane, which drives
+  every black pixel again and leaves white ones alone.
+
+The panel's RAM row 0 is the bottom of the glass, so the framebuffer is stored
+bottom-up and `SetPixel` flips y. An earlier version of the driver was ported
+from the GPLv3 `folloup-sticky` project; it was replaced so that the whole
+project, and the binaries built from it, can be MIT.
 
 ## Backend: dashboard, plugins, and storage
 
