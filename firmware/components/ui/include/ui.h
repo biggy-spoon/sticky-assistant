@@ -120,6 +120,10 @@ bool TimeKnown();
 void SetSleeping(bool sleeping);
 
 // Whether the firmware was built with a custom font (firmware/tools/make_fonts.sh).
+// What to call the assistant: "Claude", "Gemini", ... after the active model.
+void SetAssistantName(const std::string& name);
+std::string AssistantName();
+
 bool HasCustomFont();
 const char* CustomFontName();
 // Switches between the custom font and Liberation Sans. True if that changes

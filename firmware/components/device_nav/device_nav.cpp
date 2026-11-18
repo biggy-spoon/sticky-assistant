@@ -90,6 +90,7 @@ struct Clock {
     int64_t now = 0;
     int utc_offset = 0;
     bool custom_font = true;  // the Settings page's font choice
+    std::string assistant_name;
     Weather weather;
 };
 
@@ -319,6 +320,10 @@ bool FetchViews(std::vector<View>* out_views, Clock* out_clock) {
         now.daytime = cJSON_IsTrue(cJSON_GetObjectItemCaseSensitive(weather, "is_day"));
         now.as_of = JsonInt(weather, "as_of");
     }
+    const cJSON* assistant = cJSON_GetObjectItemCaseSensitive(root, "assistant");
+    if (cJSON_IsObject(assistant)) {
+        out_clock->assistant_name = JsonString(assistant, "name");
+    }
     const cJSON* device = cJSON_GetObjectItemCaseSensitive(root, "device");
     if (cJSON_IsObject(device)) {
         out_clock->custom_font = JsonString(device, "font") != "default";
@@ -402,7 +407,7 @@ ui::HomeInfo BuildHome() {
     info.weather_code = s_weather.code;
     info.daytime = s_weather.daytime;
     info.weather_as_of = s_weather.as_of;
-    info.tiles.push_back({"Claude", ui::TileIcon::kClaude, 0});
+    info.tiles.push_back({ui::AssistantName(), ui::TileIcon::kClaude, 0});
     const int64_t now = static_cast<int64_t>(time(nullptr));
     for (const View& view : s_views) {
         const ui::TileIcon icon = IconFor(view);
@@ -689,12 +694,19 @@ void HandleRefresh() {
         ui::SetClock(clock.now, clock.utc_offset);
     }
     const bool font_changed = ok && ui::UseCustomFont(clock.custom_font);
+    // A new assistant name shows on the home tile and the conversation page.
+    const bool name_changed = ok && !clock.assistant_name.empty() &&
+                              clock.assistant_name != ui::AssistantName();
+    if (name_changed) {
+        ui::SetAssistantName(clock.assistant_name);
+    }
 
     Lock();
     s_refresh_in_flight = false;
     // Forced: something (boot, or Loading after a page change) waits on this
     // fetch and has to be replaced. Otherwise an error message stays up.
-    const bool forced = s_force_render || font_changed;
+    const bool forced = s_force_render || font_changed ||
+                        (name_changed && (s_page == kHomePage || s_page == kClaudePage));
     bool render = forced;
     s_force_render = false;
     const int pending_nav = s_pending_nav;

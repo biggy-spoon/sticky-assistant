@@ -189,11 +189,30 @@ def _chat_models(provider: str) -> list[str]:
 
 # --- what the rest of the backend uses ---------------------------------------------
 
-def is_configured() -> bool:
-    provider = settings.get_ai_provider()
+def provider_configured(provider: str) -> bool:
     if provider == "openai":
         return bool(settings.get_openai_base_url())  # a local server may need no key
     return bool(settings.get_ai_api_key(provider))
+
+
+def is_configured() -> bool:
+    return provider_configured(settings.get_ai_provider())
+
+
+def assistant_name() -> str:
+    """A short name for the device to call the assistant: "Claude", "Gemini",
+    or for any other model the start of its id ("gpt-4.1-mini" -> "GPT",
+    "llama3:8b" -> "Llama3")."""
+    provider = settings.get_ai_provider()
+    if provider == "anthropic":
+        return "Claude"
+    if provider == "gemini":
+        return "Gemini"
+    model = settings.get_ai_model(provider).split("/")[-1]
+    stem = model.replace(":", "-").split("-")[0]
+    if not stem:
+        return "Assistant"
+    return stem.upper() if len(stem) <= 3 else stem[:1].upper() + stem[1:12]
 
 
 def converse(system: str, history: list[dict], transcript: str, tools: list[dict],

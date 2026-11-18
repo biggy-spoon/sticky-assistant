@@ -125,6 +125,10 @@ tracked under Unreleased until there's a first stable cut.
   font, and an on-screen keyboard for the weather location. Plugin items can
   carry `action: "choose"` with `options`, or `action: "text"`, answered
   through the new `Plugin.device_input(item_id, value)`.
+- The device calls the assistant after the active model ("Claude", "Gemini",
+  "GPT", ...) on its home tile and conversation screens, and the AI picker marks
+  providers that have no API key, which can't be chosen from the device.
+- The weather page in the style of Apple's Weather app, with a day view.
 - The battery log shows the current, the gauge's flags and the charger pin, to
   confirm charging.
 

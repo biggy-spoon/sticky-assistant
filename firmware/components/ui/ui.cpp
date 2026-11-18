@@ -137,6 +137,7 @@ std::vector<void*> s_screen_buffers;    // canvas buffers of the screen on the g
 std::vector<void*> s_building_buffers;  // ... and of the one being built
 std::vector<PendingTarget> s_pending_targets;
 int s_total_pages = 0;
+std::string s_assistant_name = "Claude";  // guarded by s_lock
 std::atomic<bool> s_keyboard_shown{false};  // read by the touch task's key hit test
 
 struct Bar {
@@ -1141,9 +1142,10 @@ void RenderHome(const HomeInfo& info, PagePos page) {
 void RenderClaude(const std::string& transcript, const std::string& reply, PagePos page) {
     s_total_pages = page.total;
     lv_obj_t* screen = NewScreen();
-    BuildBar(screen, "Claude", true, page);
+    const std::string name = AssistantName();
+    BuildBar(screen, name, true, page);
     if (transcript.empty()) {
-        Message(screen, "Ask Claude anything",
+        Message(screen, "Ask " + name + " anything",
                 "Hold the top button while you speak, then let go.");
         Present(screen, "claude");
         return;
@@ -1161,12 +1163,14 @@ void RenderClaude(const std::string& transcript, const std::string& reply, PageP
     Present(screen, "claude");
 }
 
+// conversation: one of the steps of a conversation, which share the
+// conversation page's key so moving between them is a quick partial refresh.
 void RenderMessage(const std::string& bar_title, const std::string& title, const std::string& detail,
-                   PagePos page) {
+                   PagePos page, bool conversation = false) {
     lv_obj_t* screen = NewScreen();
     BuildBar(screen, bar_title, true, page);
     Message(screen, title, detail);
-    Present(screen, bar_title == "Claude" ? "claude" : "message:" + bar_title);
+    Present(screen, conversation ? "claude" : "message:" + bar_title);
 }
 
 // --- lists (Sticky OS's Notes) ----------------------------------------------------
@@ -1985,6 +1989,22 @@ bool TimeKnown() { return s_time_known; }
 
 void SetSleeping(bool sleeping) { s_sleeping = sleeping; }
 
+void SetAssistantName(const std::string& name) {
+    if (name.empty()) {
+        return;
+    }
+    xSemaphoreTake(s_lock, portMAX_DELAY);
+    s_assistant_name = SanitizeText(name);
+    xSemaphoreGive(s_lock);
+}
+
+std::string AssistantName() {
+    xSemaphoreTake(s_lock, portMAX_DELAY);
+    std::string name = s_assistant_name;
+    xSemaphoreGive(s_lock);
+    return name;
+}
+
 bool HasCustomFont() { return STICKY_HAS_CUSTOM_FONT != 0; }
 
 const char* CustomFontName() { return STICKY_CUSTOM_FONT_NAME; }
@@ -2010,15 +2030,20 @@ void ShowClaude(const std::string& transcript, const std::string& reply, PagePos
 }
 
 void ShowRecording() {
-    Post([] { RenderMessage("Claude", "Listening...", "Let go of the button when you're done.", ClaudePage()); });
+    Post([] {
+        RenderMessage(AssistantName(), "Listening...", "Let go of the button when you're done.",
+                      ClaudePage(), true);
+    });
 }
 
 void ShowThinking() {
-    Post([] { RenderMessage("Claude", "Thinking...", "", ClaudePage()); });
+    Post([] { RenderMessage(AssistantName(), "Thinking...", "", ClaudePage(), true); });
 }
 
 void ShowError(const std::string& message) {
-    Post([message] { RenderMessage("Claude", "Couldn't send that", message, ClaudePage()); });
+    Post([message] {
+        RenderMessage(AssistantName(), "Couldn't send that", message, ClaudePage(), true);
+    });
 }
 
 void ShowLoading() {

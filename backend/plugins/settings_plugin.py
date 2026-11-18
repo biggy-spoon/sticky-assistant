@@ -140,7 +140,12 @@ class SettingsPlugin(Plugin):
         items = [
             DeviceViewItem(id="ai_provider", text="AI", secondary=ai_providers.PROVIDERS[provider],
                            action="choose", value=provider,
-                           options=_options(ai_providers.PROVIDERS.items())),
+                           # One without a key can't answer: say so, rather than
+                           # let it be picked and fail at the next question.
+                           options=_options(
+                               (p, label if ai_providers.provider_configured(p)
+                                else f"{label} (needs an API key)")
+                               for p, label in ai_providers.PROVIDERS.items())),
             DeviceViewItem(id="ai_model", text="Model", secondary=model, action="choose",
                            value=model, options=_options((m, m) for m in models)),
             DeviceViewItem(id="units", text="Units", secondary=_UNITS[settings.get_units()],
@@ -162,6 +167,9 @@ class SettingsPlugin(Plugin):
     def device_input(self, item_id: str, value: str) -> None:
         value = value.strip()
         if item_id == "ai_provider" and value in ai_providers.PROVIDERS:
+            if not ai_providers.provider_configured(value):
+                log.warning("not switching to %s from the device: it has no API key", value)
+                return
             settings.set("ai_provider", value)
         elif item_id == "ai_model" and value:
             settings.set_ai_model(settings.get_ai_provider(), value)
