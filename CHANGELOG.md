@@ -147,6 +147,9 @@ tracked under Unreleased until there's a first stable cut.
   `set_todo_done`.
 
 ### Fixed
+- The sleep screen looked grey and smudged: its last frame was a partial
+  refresh, which leaves the panel greyer, and it stays up for hours. It's now a
+  full refresh, as in Sticky OS.
 - The battery never charged on this firmware: the charger's enable pin, GPIO39,
   starts out as a JTAG pin, and setting only its direction left it there, so
   the charger stayed off. It's now configured as a GPIO first.
