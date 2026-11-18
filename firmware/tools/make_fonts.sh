@@ -47,4 +47,8 @@ make_font custom_bold_18 "$bold" 18
 make_font custom_bold_24 "$bold" 24
 make_font custom_bold_34 "$bold" 34
 make_font custom_bold_52 "$bold" 52
-echo "Fonts written to $out. Run idf.py build to use them."
+# The name the device's Settings page shows: the regular file's name, without
+# its style suffix ("Bookerly-Regular.ttf" -> "Bookerly").
+name=$(basename "$regular"); name=${name%.*}; name=${name%-Regular}; name=${name%Regular}
+printf '%s' "$name" > "$out/name.txt"
+echo "Fonts written to $out ($name). Run idf.py build to use them."

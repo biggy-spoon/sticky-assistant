@@ -15,6 +15,17 @@ import storage
 _ENV_DEFAULTS = {
     "anthropic_api_key": "ANTHROPIC_API_KEY",
     "claude_model": "CLAUDE_MODEL",
+    "gemini_api_key": "GEMINI_API_KEY",
+    "openai_api_key": "OPENAI_API_KEY",
+    "ai_provider": "AI_PROVIDER",
+}
+
+# Each provider keeps its own key and model, so switching back and forth keeps
+# both set up. Defaults are a reasonable starting model for each.
+_AI_KEYS = {
+    "anthropic": ("anthropic_api_key", "claude_model", "claude-haiku-5-5"),
+    "gemini": ("gemini_api_key", "gemini_model", "gemini-2.5-flash"),
+    "openai": ("openai_api_key", "openai_model", "gpt-4.1-mini"),
 }
 
 _CALENDAR_KEYS = [
@@ -52,6 +63,35 @@ def get_claude_model() -> str:
     return get("claude_model", "claude-haiku-5-5") or "claude-haiku-5-5"
 
 
+def get_ai_provider() -> str:
+    """"anthropic" (Claude), "gemini" or "openai" (OpenAI or any compatible API)."""
+    value = get("ai_provider", "") or "anthropic"
+    return value if value in _AI_KEYS else "anthropic"
+
+
+def get_ai_api_key(provider: str) -> str:
+    return get(_AI_KEYS[provider][0], "") or ""
+
+
+def get_ai_model(provider: str) -> str:
+    _, model_key, default = _AI_KEYS[provider]
+    return get(model_key, "") or default
+
+
+def set_ai_model(provider: str, model: str) -> None:
+    set(_AI_KEYS[provider][1], model)
+
+
+def set_ai_api_key(provider: str, key: str) -> None:
+    set(_AI_KEYS[provider][0], key)
+
+
+def get_openai_base_url() -> str:
+    """For the "openai" provider: OpenAI itself, or e.g. http://localhost:11434/v1
+    for Ollama or https://openrouter.ai/api/v1 for OpenRouter."""
+    return get("openai_base_url", "") or "https://api.openai.com/v1"
+
+
 def get_timezone_name() -> str:
     # "todo_timezone" is where this lived before it applied to the whole device.
     return get("timezone", "") or get("todo_timezone", "") or ""
@@ -66,7 +106,7 @@ def local_timezone() -> tzinfo:
         try:
             return ZoneInfo(name)
         except (ZoneInfoNotFoundError, ValueError):
-            logging.getLogger("sticky-claude").warning("Unknown timezone %r, using the server's", name)
+            logging.getLogger("sticky-assistant").warning("Unknown timezone %r, using the server's", name)
     return datetime.now().astimezone().tzinfo
 
 

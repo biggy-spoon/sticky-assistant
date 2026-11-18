@@ -17,7 +17,7 @@ namespace captive_portal {
 namespace {
 
 constexpr const char* kTag = "captive_portal";
-constexpr const char* kApSsid = "StickyClaude-Setup";
+constexpr const char* kApSsid = "StickyAssistant-Setup";
 constexpr uint16_t kDnsPort = 53;
 constexpr uint32_t kDnsTaskStackWords = 3072;
 
@@ -125,7 +125,7 @@ const char* kSetupPageHtml = R"HTML(<!DOCTYPE html>
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>sticky-claude setup</title>
+  <title>sticky-assistant setup</title>
   <style>
     body { font-family: -apple-system, system-ui, sans-serif; background: #1a1a1a; color: #f0f0f0;
            margin: 0; padding: 24px 16px; }
@@ -145,7 +145,7 @@ const char* kSetupPageHtml = R"HTML(<!DOCTYPE html>
 </head>
 <body>
   <div class="card">
-    <h1>sticky-claude</h1>
+    <h1>sticky-assistant</h1>
     <p class="sub">Connect your device to WiFi and your backend</p>
     <form action="/save" method="POST">
       <label for="ssid">WiFi network name</label>
@@ -167,7 +167,7 @@ const char* kSavedPageHtml = R"HTML(<!DOCTYPE html>
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>sticky-claude setup</title>
+  <title>sticky-assistant setup</title>
   <style>
     body { font-family: -apple-system, system-ui, sans-serif; background: #1a1a1a; color: #f0f0f0;
            display: flex; align-items: center; justify-content: center; height: 100vh; margin: 0; }

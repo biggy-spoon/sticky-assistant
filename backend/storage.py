@@ -9,7 +9,15 @@ from contextlib import contextmanager
 from datetime import datetime, timezone
 from typing import Iterator, Optional
 
-DB_PATH = os.getenv("DB_PATH", os.path.join(os.path.dirname(__file__), "sticky_claude.db"))
+def _default_db_path() -> str:
+    """sticky_assistant.db next to this file, or the sticky_claude.db an install
+    from before the rename already has, so its history and settings carry on."""
+    here = os.path.dirname(__file__)
+    old = os.path.join(here, "sticky_claude.db")
+    return old if os.path.exists(old) else os.path.join(here, "sticky_assistant.db")
+
+
+DB_PATH = os.getenv("DB_PATH") or _default_db_path()
 
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS conversations (

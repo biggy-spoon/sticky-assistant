@@ -1,4 +1,4 @@
-"""Fetches the community plugin-hub index (biggy-spoon/sticky-claude-plugin-hub)
+"""Fetches the community plugin-hub index (biggy-spoon/sticky-assistant-plugin-hub)
 so the dashboard can show what plugins exist beyond the ones already
 installed. This only ever reads metadata -- it never downloads or runs a
 plugin's code. Installing a plugin is a manual step (copy its files into
@@ -10,9 +10,9 @@ from typing import Optional
 
 import requests
 
-log = logging.getLogger("sticky-claude.plugin_hub")
+log = logging.getLogger("sticky-assistant.plugin_hub")
 
-HUB_INDEX_URL = "https://raw.githubusercontent.com/biggy-spoon/sticky-claude-plugin-hub/main/index.json"
+HUB_INDEX_URL = "https://raw.githubusercontent.com/biggy-spoon/sticky-assistant-plugin-hub/main/index.json"
 _CACHE_TTL_SECONDS = 15 * 60
 _REQUEST_TIMEOUT_SECONDS = 5
 

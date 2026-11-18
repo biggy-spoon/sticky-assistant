@@ -1,14 +1,15 @@
-# sticky-claude
+# sticky-assistant
 
-[![CI](https://github.com/biggy-spoon/sticky-claude/actions/workflows/ci.yml/badge.svg)](https://github.com/biggy-spoon/sticky-claude/actions/workflows/ci.yml)
+[![CI](https://github.com/biggy-spoon/sticky-assistant/actions/workflows/ci.yml/badge.svg)](https://github.com/biggy-spoon/sticky-assistant/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 [![Firmware license: GPLv3](https://img.shields.io/badge/firmware%2Fepaper_display-GPLv3-orange.svg)](firmware/components/epaper_display/LICENSE)
 
 A push-to-talk voice assistant on a [Seeed Studio reTerminal Sticky](https://www.seeedstudio.com/sticky/),
-proxied through your own always-on server to Claude. No cloud middleman
-you don't control, no subscription beyond what you already pay for
-Claude API usage (which, for occasional voice notes, runs to cents a
-month, not dollars).
+proxied through your own always-on server to the AI of your choice: Claude by
+default, or Gemini, OpenAI, or any OpenAI-compatible API, including models you
+run yourself. No cloud middleman you don't control, no subscription beyond what
+you already pay for API usage (which, for occasional voice notes, runs to cents
+a month, not dollars).
 
 Hold the button, speak, release. The reply shows up on the device's
 e-paper screen a few seconds later. Ask it to put something on your
@@ -35,8 +36,13 @@ calendar and it actually will.
 - **Weather**: the current conditions on the home screen and a 7-day forecast
   page where tapping a day shows its hours, from
   [Open-Meteo](https://open-meteo.com) (free, no API key).
-- **Settings on the device**: units, timezone, weather location and font, also
-  on the dashboard and changeable by voice ("switch to metric").
+- **Your choice of AI**: Claude by default, or Gemini, OpenAI, or anything that
+  offers an OpenAI-compatible API (OpenRouter, Ollama, LM Studio and others).
+  Web search works with Claude only.
+- **Settings on the device**: AI provider and model, units, timezone, weather
+  location and font, each on its own screen: a list to pick from, or an
+  on-screen keyboard for the location. Also on the dashboard, and changeable by
+  voice ("switch to metric").
 - **A calendar Claude can edit**: "move my dentist appointment to Friday at 3"
   moves it; events can also be renamed or deleted.
 - **Follow-up questions**: the last few exchanges are remembered for ten
@@ -57,7 +63,7 @@ calendar and it actually will.
   writing a new one doesn't require touching the core backend, and
   installing someone else's is a copy-and-restart. See
   `backend/plugins/` and the companion
-  [`sticky-claude-plugin-hub`](https://github.com/biggy-spoon/sticky-claude-plugin-hub)
+  [`sticky-assistant-plugin-hub`](https://github.com/biggy-spoon/sticky-assistant-plugin-hub)
   repo, a community index of plugins beyond these two defaults.
 - **Runs on hardware you already have**: the backend is a small FastAPI
   service meant for a Raspberry Pi or a ZimaOS box you already leave on.
@@ -112,7 +118,7 @@ idf.py -p <PORT> flash
 ```
 
 **3. First boot**: the device opens a WiFi network named
-`StickyClaude-Setup`. Connect to it from your phone, a setup page should
+`StickyAssistant-Setup`. Connect to it from your phone, a setup page should
 open automatically (or browse to `http://192.168.4.1/`); enter your real
 WiFi credentials and the backend's address
 (`http://<that-machine>:8000/converse`). The device reboots and connects.

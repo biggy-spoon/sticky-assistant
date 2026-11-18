@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>sticky-claude dashboard</title>
+  <title>sticky-assistant dashboard</title>
   <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Crect width='24' height='24' rx='6' fill='%237b5cff'/%3E%3Cpath d='M6 9a2 2 0 0 1 2-2h8a2 2 0 0 1 2 2v4a2 2 0 0 1-2 2H11l-3 3v-3H8a2 2 0 0 1-2-2Z' fill='white'/%3E%3C/svg%3E">
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -11,7 +11,7 @@
   <script>
     (function () {
       try {
-        var saved = localStorage.getItem('sticky-claude-theme');
+        var saved = localStorage.getItem('sticky-assistant-theme');
         if (saved === 'light' || saved === 'dark') {
           document.documentElement.setAttribute('data-theme', saved);
         }
@@ -283,7 +283,7 @@
           <svg class="icon" viewBox="0 0 24 24"><path d="M5 8a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2v5a2 2 0 0 1-2 2h-6l-4 4v-4H7a2 2 0 0 1-2-2Z"/></svg>
         </span>
         <div>
-          <div class="brand-name">sticky-claude</div>
+          <div class="brand-name">sticky-assistant</div>
           <div class="brand-sub">Dashboard</div>
         </div>
       </div>
@@ -325,17 +325,27 @@
         <span class="icon-box"><svg class="icon" viewBox="0 0 24 24"><path d="M4 6h16M4 6a2 2 0 1 0 4 0 2 2 0 1 0-4 0M4 12h16M14 12a2 2 0 1 0 4 0 2 2 0 1 0-4 0M4 18h16M7 18a2 2 0 1 0 4 0 2 2 0 1 0-4 0"/></svg></span>
         <div>
           <h2>Core settings</h2>
-          <p class="card-sub">Anthropic API access for the assistant</p>
+          <p class="card-sub">The AI behind the assistant, and the device's settings</p>
         </div>
       </div>
       <div class="field-group">
-        <label for="anthropic-key">Anthropic API key</label>
-        <input id="anthropic-key" type="password" placeholder="sk-ant-...">
-        <p class="hint">Stored locally on this backend. Never sent anywhere else.</p>
+        <label for="ai-provider">AI provider</label>
+        <select id="ai-provider" onchange="showProvider()"></select>
+        <p class="hint">Claude is the only one with web search. "OpenAI or compatible" also covers OpenRouter, Ollama, LM Studio and others, given their base URL.</p>
+      </div>
+      <div class="field-group" id="base-url-group">
+        <label for="openai-base-url">Base URL</label>
+        <input id="openai-base-url" type="text" placeholder="https://api.openai.com/v1">
       </div>
       <div class="field-group">
-        <label for="claude-model">Claude model</label>
-        <input id="claude-model" type="text" placeholder="claude-haiku-5-5">
+        <label for="ai-key">API key</label>
+        <input id="ai-key" type="password" placeholder="Leave blank to keep the saved key">
+        <p class="hint">Stored locally on this backend. Only sent to the provider you pick.</p>
+      </div>
+      <div class="field-group">
+        <label for="ai-model">Model</label>
+        <input id="ai-model" type="text" list="ai-models">
+        <datalist id="ai-models"></datalist>
       </div>
       <div class="field-group">
         <label for="timezone">Timezone</label>
@@ -391,7 +401,7 @@
       </div>
       <p class="hint" style="margin-top:14px">
         Want to publish your own? See the
-        <a href="https://github.com/biggy-spoon/sticky-claude-plugin-hub" target="_blank" rel="noopener" style="color:var(--accent)">sticky-claude-plugin-hub</a> repo.
+        <a href="https://github.com/biggy-spoon/sticky-assistant-plugin-hub" target="_blank" rel="noopener" style="color:var(--accent)">sticky-assistant-plugin-hub</a> repo.
       </p>
     </section>
   </div>
@@ -411,8 +421,8 @@
   </main>
 
   <footer class="app-footer">
-    <a href="https://github.com/biggy-spoon/sticky-claude" target="_blank" rel="noopener">
-      sticky-claude is open source — view it on GitHub
+    <a href="https://github.com/biggy-spoon/sticky-assistant" target="_blank" rel="noopener">
+      sticky-assistant is open source — view it on GitHub
       <svg class="icon" viewBox="0 0 24 24"><path d="M7 17 17 7M9 7h8v8"/></svg>
     </a>
   </footer>
@@ -431,14 +441,14 @@
         btn.setAttribute('aria-selected', isActive ? 'true' : 'false');
       }
       history.replaceState(null, '', `#${tab}`);
-      try { localStorage.setItem('sticky-claude-tab', tab); } catch (e) {}
+      try { localStorage.setItem('sticky-assistant-tab', tab); } catch (e) {}
     }
 
     function initTab() {
       const fromHash = location.hash.slice(1);
       let initial = fromHash;
       if (!TABS.includes(initial)) {
-        try { initial = localStorage.getItem('sticky-claude-tab'); } catch (e) {}
+        try { initial = localStorage.getItem('sticky-assistant-tab'); } catch (e) {}
       }
       showTab(initial);
     }
@@ -447,7 +457,7 @@
       const current = document.documentElement.getAttribute('data-theme') || 'dark';
       const next = current === 'light' ? 'dark' : 'light';
       document.documentElement.setAttribute('data-theme', next);
-      try { localStorage.setItem('sticky-claude-theme', next); } catch (e) {}
+      try { localStorage.setItem('sticky-assistant-theme', next); } catch (e) {}
     }
 
     function timeAgo(iso) {
@@ -478,14 +488,14 @@
       grid.innerHTML = [
         statusRow('Device last seen', `<span title="${seen}">${timeAgo(status.last_seen)}</span>`),
         statusRow('Device IP', status.last_ip || '--'),
-        statusRow('Claude model', escapeHtml(status.claude_model)),
+        statusRow('AI', escapeHtml(`${status.ai_provider}: ${status.ai_model}`)),
         statusRow('Whisper model', escapeHtml(status.whisper_model)),
-        statusRow('Anthropic key', configuredPill(status.anthropic_configured, 'Configured', 'Not set')),
+        statusRow('API key', configuredPill(status.ai_configured, 'Configured', 'Not set')),
       ].join('');
 
       const readyPill = document.getElementById('ready-pill');
-      readyPill.className = `pill ${status.anthropic_configured ? 'ok' : 'warn'}`;
-      readyPill.innerHTML = status.anthropic_configured
+      readyPill.className = `pill ${status.ai_configured ? 'ok' : 'warn'}`;
+      readyPill.innerHTML = status.ai_configured
         ? `<span class="dot ok"></span><span>Assistant ready</span>`
         : `<span class="dot bad"></span><span>Needs API key</span>`;
     }
@@ -509,9 +519,30 @@
       `).join('');
     }
 
+    let coreConfig = null;
+
+    async function showProvider() {
+      const provider = document.getElementById('ai-provider').value;
+      const saved = coreConfig.ai[provider] || {};
+      document.getElementById('ai-model').value = saved.model || '';
+      document.getElementById('ai-key').placeholder = saved.api_key
+        ? `Saved: ${saved.api_key}` : 'Not set yet';
+      document.getElementById('base-url-group').style.display = provider === 'openai' ? '' : 'none';
+      const list = document.getElementById('ai-models');
+      list.innerHTML = '';
+      const result = await fetch(`/api/ai/models?provider=${provider}`).then(r => r.json()).catch(() => ({}));
+      list.innerHTML = (result.models || []).map(m => `<option value="${escapeHtml(m)}">`).join('');
+    }
+
     async function loadCoreSettings() {
       const config = await fetch('/api/settings').then(r => r.json());
-      document.getElementById('claude-model').value = config.claude_model || '';
+      coreConfig = config;
+      const select = document.getElementById('ai-provider');
+      select.innerHTML = Object.entries(config.ai_providers)
+        .map(([id, label]) => `<option value="${id}">${escapeHtml(label)}</option>`).join('');
+      select.value = config.ai_provider;
+      document.getElementById('openai-base-url').value = config.openai_base_url || '';
+      showProvider();
       document.getElementById('timezone').value = config.timezone || '';
       document.getElementById('units').value = config.units || 'imperial';
       document.getElementById('device-font').value = config.device_font || 'custom';
@@ -519,13 +550,15 @@
 
     async function saveCoreSettings() {
       const body = {
-        claude_model: document.getElementById('claude-model').value,
+        ai_provider: document.getElementById('ai-provider').value,
+        ai_model: document.getElementById('ai-model').value,
+        openai_base_url: document.getElementById('openai-base-url').value,
         timezone: document.getElementById('timezone').value,
         units: document.getElementById('units').value,
         device_font: document.getElementById('device-font').value,
       };
-      const key = document.getElementById('anthropic-key').value;
-      if (key) body.anthropic_api_key = key;
+      const key = document.getElementById('ai-key').value;
+      if (key) body.ai_api_key = key;
       const response = await fetch('/api/settings', {
         method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(body),
       });
@@ -534,8 +567,10 @@
         alert(error.detail || 'Could not save the settings');
         return;
       }
+      document.getElementById('ai-key').value = '';
       flashSaved('core-save-msg');
       loadStatus();
+      loadCoreSettings();
     }
 
     function fieldInputId(pluginId, key) { return `field-${pluginId}-${key}`; }

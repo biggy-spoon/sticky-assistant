@@ -6,4 +6,4 @@ include($ENV{IDF_PATH}/tools/cmake/project.cmake)
 idf_build_set_property(COMPILE_DEFINITIONS
     "LV_MEM_POOL_INCLUDE=\"${CMAKE_CURRENT_LIST_DIR}/components/ui/lv_psram_pool.h\"" APPEND)
 idf_build_set_property(COMPILE_DEFINITIONS "LV_MEM_POOL_ALLOC=sticky_lv_pool_alloc" APPEND)
-project(sticky_claude)
+project(sticky_assistant)

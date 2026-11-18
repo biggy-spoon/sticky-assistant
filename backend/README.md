@@ -1,10 +1,11 @@
-# sticky-claude backend
+# sticky-assistant backend
 
 Small FastAPI service meant to run on an always-on home server (Pi or ZimaOS).
 It is the proxy the reTerminal Sticky firmware talks to: the device uploads a
 WAV recording, this service transcribes it locally with
 [faster-whisper](https://github.com/SYSTRAN/faster-whisper), sends the
-transcript to the Claude API, and returns `{ "transcript": ..., "reply": ... }`
+transcript to the AI model set on the dashboard (Claude by default, or Gemini,
+OpenAI or any OpenAI-compatible API), and returns `{ "transcript": ..., "reply": ... }`
 for the device to display.
 
 ## Run locally
@@ -23,8 +24,8 @@ on RAM.
 ## Run with Docker
 
 ```bash
-docker build -t sticky-claude-backend .
-docker run -p 8000:8000 --env-file .env sticky-claude-backend
+docker build -t sticky-assistant-backend .
+docker run -p 8000:8000 --env-file .env sticky-assistant-backend
 ```
 
 ## Dashboard
@@ -57,7 +58,7 @@ whole install story, for a built-in or a third-party plugin alike. **To
 install a community plugin**, copy its file(s) into `plugins/` and
 restart the backend; nothing else to edit. The dashboard's "Plugin hub"
 card lists what's available from
-[sticky-claude-plugin-hub](https://github.com/biggy-spoon/sticky-claude-plugin-hub)
+[sticky-assistant-plugin-hub](https://github.com/biggy-spoon/sticky-assistant-plugin-hub)
 (a metadata index only — the backend never fetches or runs a plugin's
 code on its own, so review a plugin before dropping it in).
 
@@ -112,7 +113,7 @@ about it.
   `{"open": [...], "done": [...]}`).
 - `GET /api/plugin-hub` — the community plugin index (name, description,
   repo URL, install state), proxied and cached from
-  `sticky-claude-plugin-hub`.
+  `sticky-assistant-plugin-hub`.
 - Plugins may add their own routes too — calendar adds
   `GET /api/plugins/calendar/google/login` and `/callback` for its OAuth
   flow.

@@ -1,7 +1,8 @@
-"""Voice-to-Claude proxy for the reTerminal Sticky, plus a small dashboard.
+"""Voice assistant proxy for the reTerminal Sticky, plus a small dashboard.
 
 Receives a WAV recording from the device, transcribes it locally with
-faster-whisper, sends the transcript to Claude (with whatever tools the
+faster-whisper, sends the transcript to the configured AI model (see
+ai_providers.py; Claude by default), with whatever tools the
 configured plugins contribute -- see plugins/ -- so it can actually act,
 not just talk about acting), and returns the transcript + reply as JSON
 for the device to render. The dashboard (see dashboard.html) exposes
@@ -16,13 +17,13 @@ import time
 from datetime import datetime, timezone
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
-import anthropic
-from anthropic import Anthropic
 from dotenv import load_dotenv
 from fastapi import FastAPI, HTTPException, Request
+from fastapi.concurrency import run_in_threadpool
 from fastapi.responses import FileResponse, JSONResponse
 from faster_whisper import WhisperModel
 
+import ai_providers
 import plugin_hub
 import plugins
 import settings
@@ -31,7 +32,7 @@ import storage
 load_dotenv()
 
 logging.basicConfig(level=logging.INFO)
-log = logging.getLogger("sticky-claude")
+log = logging.getLogger("sticky-assistant")
 
 # Whisper is loaded once at startup; changing these needs a restart.
 WHISPER_MODEL_SIZE = os.getenv("WHISPER_MODEL_SIZE", "small")
@@ -50,23 +51,6 @@ SYSTEM_PROMPT_TEMPLATE = (
     "it rather than just describing what you would do. Earlier messages in the conversation "
     "are the user's recent requests, so a short reply like \"yes\" answers your last question."
 )
-
-# Models that accept the newer web search tool. The model setting is free text,
-# and an older model rejects the whole request if sent this version, so anything
-# not listed here gets the basic one.
-_WEB_SEARCH_20260209_MODELS = {
-    "claude-fable-5-1", "claude-fable-5", "claude-opus-5-5", "claude-opus-5", "claude-opus-4-8",
-    "claude-opus-4-7", "claude-opus-4-6", "claude-sonnet-5-5", "claude-sonnet-5",
-    "claude-sonnet-4-6", "claude-haiku-5-5",
-}
-
-
-def _web_search_tool(model: str) -> dict:
-    """Anthropic runs this tool itself, so there's no plugin behind it. max_uses
-    limits how long a reply can take and what it can cost, since each search is
-    billed."""
-    version = "20260209" if model in _WEB_SEARCH_20260209_MODELS else "20250305"
-    return {"type": f"web_search_{version}", "name": "web_search", "max_uses": 3}
 
 # Recent exchanges, so a follow-up ("yes, the 13th") makes sense. Only the text
 # of each question and answer is kept, in memory, for a few minutes.
@@ -92,7 +76,7 @@ def _remember(question: str, answer: str) -> None:
     with _memory_lock:
         _memory.append((time.time(), question, answer))
 
-app = FastAPI(title="sticky-claude backend")
+app = FastAPI(title="sticky-assistant backend")
 whisper_model: WhisperModel | None = None
 
 DASHBOARD_PATH = os.path.join(os.path.dirname(__file__), "dashboard.html")
@@ -117,8 +101,9 @@ def health() -> dict:
     return {
         "status": "ok",
         "whisper_model": WHISPER_MODEL_SIZE,
-        "claude_model": settings.get_claude_model(),
-        "anthropic_configured": bool(settings.get_anthropic_api_key()),
+        "ai_provider": settings.get_ai_provider(),
+        "ai_model": settings.get_ai_model(settings.get_ai_provider()),
+        "ai_configured": ai_providers.is_configured(),
     }
 
 
@@ -126,9 +111,9 @@ def health() -> dict:
 async def converse(request: Request) -> JSONResponse:
     if whisper_model is None:
         raise HTTPException(status_code=503, detail="Whisper model not loaded yet")
-    api_key = settings.get_anthropic_api_key()
-    if not api_key:
-        raise HTTPException(status_code=500, detail="ANTHROPIC_API_KEY not configured")
+    if not ai_providers.is_configured():
+        provider = ai_providers.PROVIDERS[settings.get_ai_provider()]
+        raise HTTPException(status_code=500, detail=f"No API key set for {provider}")
 
     audio_bytes = await request.body()
     if not audio_bytes:
@@ -139,8 +124,10 @@ async def converse(request: Request) -> JSONResponse:
     if request.client is not None:
         storage.record_device_seen(request.client.host)
 
+    # Transcribing and asking the model each take seconds, so they run on a
+    # worker thread: the device and dashboard can still reach the backend.
     try:
-        transcript = _transcribe(audio_bytes)
+        transcript = await run_in_threadpool(_transcribe, audio_bytes)
     except Exception as exc:
         log.exception("Transcription failed")
         raise HTTPException(status_code=400, detail=f"Could not process audio: {exc}") from exc
@@ -148,11 +135,11 @@ async def converse(request: Request) -> JSONResponse:
         raise HTTPException(status_code=422, detail="Could not transcribe any speech")
 
     try:
-        reply = _converse_with_claude(transcript, api_key)
-    except anthropic.APIError as exc:
-        log.exception("Claude request failed")
+        reply = await run_in_threadpool(_reply_to, transcript)
+    except ai_providers.AIError as exc:
+        log.exception("Model request failed")
         storage.log_conversation(transcript, None, success=False, error_message=str(exc))
-        raise HTTPException(status_code=502, detail=f"Claude request failed: {exc}") from exc
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
 
     log.info("transcript=%r reply=%r", transcript, reply)
     storage.log_conversation(transcript, reply, success=True)
@@ -187,54 +174,18 @@ def _execute_tool(name: str, tool_input: dict, tool_owner: dict[str, str]) -> st
     return plugin.execute_tool(name, tool_input)
 
 
-def _final_text(content: list) -> str:
-    """The text after the last tool activity. Claude can write a line before a
-    search, like "Let me look that up", which isn't part of the answer."""
-    parts: list[str] = []
-    for block in content:
-        if block.type == "text":
-            parts.append(block.text)
-        elif block.type != "thinking":
-            parts = []
-    return "".join(parts).strip()
-
-
-def _converse_with_claude(transcript: str, api_key: str, max_tool_iterations: int = 5) -> str:
-    client = Anthropic(api_key=api_key)
-    model = settings.get_claude_model()
+def _system_prompt() -> str:
     now = datetime.now(settings.local_timezone())
-    system_prompt = SYSTEM_PROMPT_TEMPLATE.format(
+    return SYSTEM_PROMPT_TEMPLATE.format(
         today=f"{now.strftime('%A, %B %d, %Y')}, and the time is {now.strftime('%I:%M %p').lstrip('0')}"
               f" ({settings.get_timezone_name() or 'server time'})")
+
+
+def _reply_to(transcript: str) -> str:
     tool_defs, tool_owner = _collect_tools()
-    tool_defs.append(_web_search_tool(model))
-
-    messages: list[dict] = _recent_exchanges() + [{"role": "user", "content": transcript}]
-
-    for _ in range(max_tool_iterations):
-        # Thinking counts towards max_tokens, so this is well above the reply length.
-        response = client.messages.create(model=model, max_tokens=4096, system=system_prompt,
-                                          messages=messages, tools=tool_defs)
-
-        messages.append({"role": "assistant", "content": response.content})
-        if response.stop_reason == "pause_turn":
-            continue  # a long search paused; sending it back as is resumes it
-        if response.stop_reason != "tool_use":
-            return _final_text(response.content) or "I don't have an answer for that."
-
-        tool_results = []
-        for block in response.content:
-            if block.type != "tool_use":
-                continue
-            result_text = _execute_tool(block.name, block.input, tool_owner)
-            tool_results.append({
-                "type": "tool_result",
-                "tool_use_id": block.id,
-                "content": result_text,
-            })
-        messages.append({"role": "user", "content": tool_results})
-
-    return "I'm having trouble finishing that request -- can you try again?"
+    return ai_providers.converse(
+        _system_prompt(), _recent_exchanges(), transcript, tool_defs,
+        lambda name, tool_input: _execute_tool(name, tool_input, tool_owner))
 
 
 # --- Dashboard ---------------------------------------------------------
@@ -253,26 +204,56 @@ def api_history(limit: int = 50) -> list[dict]:
 def api_status() -> dict:
     status = storage.get_device_status()
     status["whisper_model"] = WHISPER_MODEL_SIZE
-    status["claude_model"] = settings.get_claude_model()
-    status["anthropic_configured"] = bool(settings.get_anthropic_api_key())
+    provider = settings.get_ai_provider()
+    status["ai_provider"] = ai_providers.PROVIDERS[provider]
+    status["ai_model"] = settings.get_ai_model(provider)
+    status["ai_configured"] = ai_providers.is_configured()
     return status
 
 
 @app.get("/api/settings")
 def api_get_settings() -> dict:
-    redacted = settings.redact({"anthropic_api_key": settings.get_anthropic_api_key()})
     return {
-        "anthropic_api_key": redacted["anthropic_api_key"],
-        "claude_model": settings.get_claude_model(),
+        "ai_provider": settings.get_ai_provider(),
+        "ai_providers": ai_providers.PROVIDERS,
+        # Per provider, so the form can show each one's key (masked) and model.
+        "ai": {provider: {"api_key": settings.redact({"k": settings.get_ai_api_key(provider)})["k"],
+                          "model": settings.get_ai_model(provider)}
+               for provider in ai_providers.PROVIDERS},
+        "openai_base_url": settings.get_openai_base_url(),
         "timezone": settings.get_timezone_name(),
         "units": settings.get_units(),
         "device_font": settings.get_device_font(),
     }
 
 
+@app.get("/api/ai/models")
+def api_ai_models(provider: str = "") -> dict:
+    provider = provider or settings.get_ai_provider()
+    if provider not in ai_providers.PROVIDERS:
+        raise HTTPException(status_code=400, detail=f"Unknown AI provider: {provider}")
+    try:
+        return {"models": ai_providers.list_models(provider)}
+    except Exception as exc:  # noqa: BLE001 -- shown in the dashboard
+        return {"models": [settings.get_ai_model(provider)], "error": str(exc)}
+
+
 @app.post("/api/settings")
 async def api_set_settings(request: Request) -> dict:
     body = await request.json()
+    provider = body.get("ai_provider")
+    if provider is not None:
+        if provider not in ai_providers.PROVIDERS:
+            raise HTTPException(status_code=400, detail=f"Unknown AI provider: {provider}")
+        settings.set("ai_provider", provider)
+    provider = settings.get_ai_provider()
+    if body.get("ai_api_key"):
+        settings.set_ai_api_key(provider, body["ai_api_key"])
+    if body.get("ai_model"):
+        settings.set_ai_model(provider, str(body["ai_model"]).strip())
+    if body.get("openai_base_url"):
+        settings.set("openai_base_url", str(body["openai_base_url"]).strip())
+    # The older Claude-only fields, still accepted.
     if body.get("anthropic_api_key"):
         settings.set("anthropic_api_key", body["anthropic_api_key"])
     if body.get("claude_model"):
@@ -351,13 +332,14 @@ def api_plugin_hub() -> dict:
 # --- Device screens (Up/Down button navigation on the ePaper panel) ----
 
 @app.get("/api/device/views")
-def api_device_views(fonts: str = "") -> dict:
+def api_device_views(fonts: str = "", font_name: str = "") -> dict:
     """Every configured plugin's own on-device screen, in a fixed order
     (plugin registration order), for the firmware to page through. The device's own home/conversation screen isn't
     included -- it's rendered locally by the firmware without a backend
     round-trip."""
     from plugins import settings_plugin
     settings_plugin.device_has_custom_font = "custom" in fonts.split(",")
+    settings_plugin.device_custom_font_name = font_name.strip()[:40]
     views = []
     # Settings goes last, after the plugins it configures.
     ordered = sorted(plugins.all_plugins(), key=lambda plugin: plugin.id == "settings")
@@ -370,12 +352,14 @@ def api_device_views(fonts: str = "") -> dict:
         views.append({
             "plugin_id": plugin.id,
             "view_type": view.view_type,
+            "data": view.data,
             "title": view.title,
             "body": view.body,
             "items": [{"id": item.id, "text": item.text, "secondary": item.secondary,
                        "detail": item.detail, "checked": item.checked,
                        "start_ts": item.start_ts, "end_ts": item.end_ts, "all_day": item.all_day,
-                       "action": item.action}
+                       "action": item.action, "options": item.options or [],
+                       "value": item.value}
                       for item in (view.items or [])],
         })
     # The device has no clock of its own worth trusting, so it sets its time
@@ -384,7 +368,9 @@ def api_device_views(fonts: str = "") -> dict:
     offset = datetime.fromtimestamp(now, settings.local_timezone()).utcoffset()
     result = {"views": views,
               "clock": {"now": int(now), "utc_offset": int(offset.total_seconds()) if offset else 0},
-              "device": {"font": settings.get_device_font()}}
+              "device": {"font": settings.get_device_font()},
+              "assistant": {"name": ai_providers.assistant_name(),
+                            "model": settings.get_ai_model(settings.get_ai_provider())}}
     weather = plugins.get("weather")
     if weather is not None and weather.is_configured():
         from plugins import weather_plugin
@@ -403,6 +389,9 @@ async def api_plugin_device_action(plugin_id: str, request: Request) -> dict:
     item_id = body.get("item_id")
     if not item_id:
         raise HTTPException(status_code=400, detail="item_id is required")
+    if "value" in body:  # a pick from a list, or typed text
+        plugin.device_input(str(item_id), str(body["value"]))
+        return {"success": True}
     # Checkable rows send the state they should now have; tap rows send none.
     checked = body.get("checked")
     if checked is not None and not isinstance(checked, bool):

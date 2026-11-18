@@ -55,6 +55,49 @@ struct ListRow {
     bool checkable = false;
     bool checked = false;  // ticked box and struck-through text
     bool has_detail = false;  // a chevron: tapping opens more
+    bool radio = false;       // one of a set of choices: a round mark
+    bool selected = false;    // ... the one chosen
+};
+
+struct WeatherHour {
+    int64_t ts = 0;  // Unix time
+    int temp = 0;
+    int code = 0;  // WMO weather code
+    bool daytime = true;
+    int rain = 0;  // chance, percent
+    int wind = 0;
+};
+
+struct WeatherDay {
+    int64_t ts = 0;  // local midnight
+    int code = 0;
+    int low = 0;
+    int high = 0;
+    int rain = 0;
+    std::string condition;
+    int64_t sunrise = 0;
+    int64_t sunset = 0;
+    std::vector<WeatherHour> hours;  // every three hours
+};
+
+struct WeatherInfo {
+    std::string place;
+    char unit = 'F';
+    std::string wind_unit;
+    int temp = 0;
+    int code = 0;
+    bool daytime = true;
+    std::string condition;
+    int high = 0;
+    int low = 0;
+    std::vector<WeatherHour> hourly;  // from this hour on
+    std::vector<WeatherDay> days;
+};
+
+struct KeyboardInfo {
+    std::string title;
+    std::string text;  // typed so far
+    bool caps = false;
 };
 
 struct AgendaItem {
@@ -77,7 +120,12 @@ bool TimeKnown();
 void SetSleeping(bool sleeping);
 
 // Whether the firmware was built with a custom font (firmware/tools/make_fonts.sh).
+// What to call the assistant: "Claude", "Gemini", ... after the active model.
+void SetAssistantName(const std::string& name);
+std::string AssistantName();
+
 bool HasCustomFont();
+const char* CustomFontName();
 // Switches between the custom font and Liberation Sans. True if that changes
 // anything, in which case the caller should redraw.
 bool UseCustomFont(bool custom);
@@ -96,6 +144,18 @@ void ShowAgenda(const std::string& title, const std::vector<AgendaItem>& items, 
                 bool keep_scroll);
 // with_back shows a back arrow and makes a tap anywhere below the bar go back.
 void ShowDetail(const std::string& title, const std::string& body, PagePos page, bool with_back);
+// The weather in the style of a phone's weather app: now on the left, the next
+// hours and the week on the right. Each day row is a kRow target.
+void ShowWeather(const WeatherInfo& info, PagePos page);
+// One day's hours, conditions and sun. A tap anywhere is kBody (back).
+void ShowWeatherDay(const WeatherInfo& info, int day, PagePos page);
+
+// A text field and an on-screen keyboard. Taps on keys come back from HitTest
+// as kKey with the key's index; KeyAt says what it is.
+void ShowKeyboard(const KeyboardInfo& info, PagePos page);
+
+// A key's meaning: one character, or "shift", "back", "space" or "done".
+const char* KeyAt(int index);
 
 // Redraws the screen showing with a full refresh, clearing any ghosts the
 // partial refreshes have left.
@@ -112,7 +172,7 @@ bool IsBusy();
 // Waits until nothing is pending or drawing. False on timeout.
 bool WaitIdle(uint32_t timeout_ms);
 
-enum class HitKind { kNone, kStatusBar, kTile, kRow, kBody };
+enum class HitKind { kNone, kStatusBar, kTile, kRow, kBody, kKey };
 struct Hit {
     HitKind kind = HitKind::kNone;
     int index = -1;  // the tile's or row's index
@@ -120,5 +180,8 @@ struct Hit {
 
 // What's at this screen position. kNone while busy.
 Hit HitTest(int x, int y);
+// The keyboard's key at this position, even mid-refresh: the keys never move,
+// so typing can run ahead of the screen. -1 if none, or no keyboard showing.
+int HitTestKey(int x, int y);
 
 }  // namespace ui

@@ -52,7 +52,7 @@ endpoint for STT.
 The device ships unconfigured. On boot, `settings_service` checks NVS for
 saved WiFi credentials and a backend URL; if none exist, `main.cpp` starts
 `captive_portal` instead of the normal flow: an open WiFi AP
-(`StickyClaude-Setup`), a DNS server that answers every query with
+(`StickyAssistant-Setup`), a DNS server that answers every query with
 its own IP (the standard trick that makes phones auto-open the setup
 page), and an HTTP form. Submitting the form saves to NVS and reboots the
 device into normal operation. This replaced an earlier Kconfig/recompile-
@@ -149,6 +149,16 @@ repository is MIT.
   Overview tab), falling back to the older `todo_timezone`, then the server's
   timezone. The same timezone sets the device's clock: `GET
   /api/device/views` returns `clock: {now, utc_offset}` alongside the views.
+- `ai_providers.py` — the model behind the assistant. Claude goes through
+  Anthropic's Messages API (with web search); Gemini, OpenAI and anything
+  OpenAI-compatible go through one chat-completions client over `requests`,
+  which converts the plugins' Anthropic-format tool definitions. Each provider
+  keeps its own key and model in settings.
+- Device rows can open screens of their own: `action: "choose"` lists
+  `options` to pick from, and `action: "text"` opens an on-screen keyboard. The
+  answer reaches the plugin through `device_input(item_id, value)` (a POST to
+  the device-action route with `value`). The keyboard's keys never move, so the
+  firmware takes key taps even while a refresh is running.
 - Web search isn't a plugin. `app.py` adds Anthropic's server-side tool to every
   request, so Anthropic runs it and the results come back in the same response.
   It uses `web_search_20260209` on models known to accept it and
@@ -156,7 +166,7 @@ repository is MIT.
   and an older model rejects the whole request if sent the newer version.
 - `plugin_hub.py` + `GET /api/plugin-hub` — fetches and caches
   `index.json` from the separate
-  [`sticky-claude-plugin-hub`](https://github.com/biggy-spoon/sticky-claude-plugin-hub)
+  [`sticky-assistant-plugin-hub`](https://github.com/biggy-spoon/sticky-assistant-plugin-hub)
   repo, a community-maintained list of third-party plugins (metadata
   only: name, description, repo URL). The dashboard shows it alongside
   which ones are already installed. This never fetches or executes a

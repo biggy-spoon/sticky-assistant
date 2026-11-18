@@ -2,7 +2,7 @@
 
 #include "esp_err.h"
 
-// First-run setup flow: starts an open WiFi AP ("StickyClaude-Setup"), a DNS
+// First-run setup flow: starts an open WiFi AP ("StickyAssistant-Setup"), a DNS
 // server that answers every query with the AP's own IP (the standard
 // captive-portal trick so phones auto-open the setup page), and an HTTP
 // server with a settings form. On submit, saves to settings_service and

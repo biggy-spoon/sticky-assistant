@@ -24,6 +24,7 @@ struct Status {
     bool battery_known = false;
     int percent = 0;
     bool usb_power = false;
+    bool charging = false;  // current flowing into the battery
 };
 
 // Read every 30 seconds in the background, so this never blocks.
