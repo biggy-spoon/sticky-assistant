@@ -64,7 +64,12 @@ def _condition(code) -> str:
 
 
 def _imperial() -> bool:
-    return settings.get("weather_units", "imperial") != "metric"
+    return settings.get_units() == "imperial"
+
+
+def locate(query: str) -> Optional[dict]:
+    """Public for the settings plugin, which checks a location before saving it."""
+    return _locate(query)
 
 
 def _locate(query: str) -> Optional[dict]:
@@ -119,6 +124,7 @@ def _forecast() -> Optional[dict]:
         "daily": "weather_code,temperature_2m_max,temperature_2m_min,"
                  "precipitation_probability_max,sunrise,sunset",
         "hourly": "temperature_2m,precipitation_probability,weather_code,wind_speed_10m",
+        "current": "temperature_2m,weather_code,is_day",
     }
     if _imperial():
         params.update(temperature_unit="fahrenheit", wind_speed_unit="mph",
@@ -195,6 +201,31 @@ def _hourly_text(data: dict, day: dict, now: datetime) -> str:
     return "\n".join(lines)
 
 
+def current_conditions() -> Optional[dict]:
+    """Now, for the device's home screen: {"temp", "unit", "condition", "code",
+    "is_day", "as_of"} with as_of the Unix time of the reading, or None."""
+    try:
+        data = _forecast()
+    except Exception:
+        log.exception("Failed to load current weather")
+        return None
+    if data is None or "current" not in data:
+        return None
+    current = data["current"]
+    # Open-Meteo gives local wall-clock times plus the location's UTC offset.
+    observed = datetime.fromisoformat(current["time"])
+    as_of = int((observed - datetime(1970, 1, 1)).total_seconds()) - int(data.get("utc_offset_seconds", 0))
+    return {
+        "temp": round(current["temperature_2m"]),
+        "unit": "F" if _imperial() else "C",
+        "condition": _condition(current["weather_code"]),
+        "code": int(current["weather_code"]),
+        "is_day": bool(current.get("is_day", 1)),
+        "as_of": as_of,
+        "place": data["place"],
+    }
+
+
 class WeatherPlugin(Plugin):
     @property
     def id(self) -> str:
@@ -209,13 +240,10 @@ class WeatherPlugin(Plugin):
         return "A 7-day forecast with hourly detail, from Open-Meteo (free, no API key)."
 
     def settings_schema(self) -> list[SettingField]:
+        # Units are a core setting (Overview tab, or the device's Settings page).
         return [
             SettingField(key="weather_location", label="Location",
                          placeholder='A city, e.g. "Seattle, WA", or "47.61,-122.33"'),
-            SettingField(key="weather_units", label="Units", type="select", options=[
-                {"value": "imperial", "label": "Fahrenheit, mph"},
-                {"value": "metric", "label": "Celsius, km/h"},
-            ]),
         ]
 
     def is_configured(self) -> bool:

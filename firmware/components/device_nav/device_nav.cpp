@@ -47,6 +47,7 @@ struct Item {
     int64_t start_ts = 0;
     int64_t end_ts = 0;
     bool all_day = false;
+    bool tap_action = false;  // tapping asks the plugin to act, then shows the result
 
     bool operator==(const Item&) const = default;
 };
@@ -61,10 +62,23 @@ struct View {
     bool operator==(const View&) const = default;
 };
 
+struct Weather {
+    bool known = false;
+    int temperature = 0;
+    char unit = 'F';
+    int code = 0;
+    bool daytime = true;
+    int64_t as_of = 0;
+
+    bool operator==(const Weather&) const = default;
+};
+
 struct Clock {
     bool known = false;
     int64_t now = 0;
     int utc_offset = 0;
+    bool custom_font = true;  // the Settings page's font choice
+    Weather weather;
 };
 
 enum class CommandType { kRefresh, kPostAction, kRedraw };
@@ -72,6 +86,7 @@ enum class CommandType { kRefresh, kPostAction, kRedraw };
 struct Command {
     CommandType type;
     bool checked = false;
+    bool tap = false;  // kPostAction for a tap row: no checked state, refresh after
     char plugin_id[kMaxIdLen] = {};
     char item_id[kMaxIdLen] = {};
 };
@@ -103,6 +118,7 @@ int s_pending_nav = 0;        // page change waiting on the first fetch
 bool s_force_render = false;  // the next fetch has to draw, whatever it returns
 int s_posts_pending = 0;
 int64_t s_last_fetch_us = 0;  // 0 = the cache needs refreshing at the next chance
+Weather s_weather;
 
 void Lock() { xSemaphoreTake(s_state_mutex, portMAX_DELAY); }
 void Unlock() { xSemaphoreGive(s_state_mutex); }
@@ -178,7 +194,9 @@ int64_t JsonInt(const cJSON* object, const char* key) {
 // Fetches and parses GET /api/device/views. Only ever called from
 // DeviceNavTask -- this is a blocking network call.
 bool FetchViews(std::vector<View>* out_views, Clock* out_clock) {
-    const std::string url = BaseUrl() + "/api/device/views";
+    // The backend only offers a font choice to firmware that has one.
+    const std::string url = BaseUrl() + "/api/device/views" +
+                            (ui::HasCustomFont() ? "?fonts=custom" : "");
     ResponseBuffer response_buffer;
 
     esp_http_client_config_t config = {};
@@ -230,6 +248,7 @@ bool FetchViews(std::vector<View>* out_views, Clock* out_clock) {
             item.start_ts = JsonInt(item_json, "start_ts");
             item.end_ts = JsonInt(item_json, "end_ts");
             item.all_day = cJSON_IsTrue(cJSON_GetObjectItemCaseSensitive(item_json, "all_day"));
+            item.tap_action = JsonString(item_json, "action") == "tap";
             view.items.push_back(std::move(item));
         }
         views.push_back(std::move(view));
@@ -241,6 +260,21 @@ bool FetchViews(std::vector<View>* out_views, Clock* out_clock) {
         out_clock->now = JsonInt(clock, "now");
         out_clock->utc_offset = static_cast<int>(JsonInt(clock, "utc_offset"));
     }
+    const cJSON* weather = cJSON_GetObjectItemCaseSensitive(root, "weather");
+    if (cJSON_IsObject(weather)) {
+        Weather& now = out_clock->weather;
+        now.known = true;
+        now.temperature = static_cast<int>(JsonInt(weather, "temp"));
+        const std::string unit = JsonString(weather, "unit");
+        now.unit = unit.empty() ? 'F' : unit[0];
+        now.code = static_cast<int>(JsonInt(weather, "code"));
+        now.daytime = cJSON_IsTrue(cJSON_GetObjectItemCaseSensitive(weather, "is_day"));
+        now.as_of = JsonInt(weather, "as_of");
+    }
+    const cJSON* device = cJSON_GetObjectItemCaseSensitive(root, "device");
+    if (cJSON_IsObject(device)) {
+        out_clock->custom_font = JsonString(device, "font") != "default";
+    }
     cJSON_Delete(root);
 
     *out_views = std::move(views);
@@ -249,13 +283,15 @@ bool FetchViews(std::vector<View>* out_views, Clock* out_clock) {
 
 // Sends the state the row should now have, rather than asking for a toggle, so
 // a repeated request can't flip it back. Only ever called from DeviceNavTask.
-bool PostDeviceAction(const char* plugin_id, const char* item_id, bool checked) {
+bool PostDeviceAction(const char* plugin_id, const char* item_id, bool checked, bool tap) {
     cJSON* json = cJSON_CreateObject();
     if (json == nullptr) {
         return false;
     }
     cJSON_AddStringToObject(json, "item_id", item_id);
-    cJSON_AddBoolToObject(json, "checked", checked);
+    if (!tap) {
+        cJSON_AddBoolToObject(json, "checked", checked);
+    }
     char* body = cJSON_PrintUnformatted(json);
     cJSON_Delete(json);
     if (body == nullptr) {
@@ -289,6 +325,7 @@ bool PostDeviceAction(const char* plugin_id, const char* item_id, bool checked) 
 ui::TileIcon IconFor(const View& view) {
     if (view.view_type == "agenda") return ui::TileIcon::kCalendar;
     if (view.plugin_id == "weather") return ui::TileIcon::kWeather;
+    if (view.plugin_id == "settings") return ui::TileIcon::kSettings;
     for (const Item& item : view.items) {
         if (item.checkable) return ui::TileIcon::kChecklist;
     }
@@ -307,6 +344,12 @@ int OpenCount(const View& view) {
 ui::HomeInfo BuildHome() {
     ui::HomeInfo info;
     info.wifi_connected = s_wifi_connected;
+    info.has_weather = s_weather.known;
+    info.temperature = s_weather.temperature;
+    info.temperature_unit = s_weather.unit;
+    info.weather_code = s_weather.code;
+    info.daytime = s_weather.daytime;
+    info.weather_as_of = s_weather.as_of;
     info.tiles.push_back({"Claude", ui::TileIcon::kClaude, 0});
     const int64_t now = static_cast<int64_t>(time(nullptr));
     for (const View& view : s_views) {
@@ -374,7 +417,8 @@ void RenderCurrentLocked(bool keep_scroll) {
     std::vector<ui::ListRow> rows;
     rows.reserve(view->items.size());
     for (const Item& item : view->items) {
-        rows.push_back({item.text, item.secondary, item.checkable, item.checked, !item.detail.empty()});
+        rows.push_back({item.text, item.secondary, item.checkable, item.checked,
+                        !item.detail.empty() || item.tap_action});
     }
     ui::ShowList(view->title, rows, page, keep_scroll);
 }
@@ -444,12 +488,13 @@ void HandleRefresh() {
     if (clock.known) {
         ui::SetClock(clock.now, clock.utc_offset);
     }
+    const bool font_changed = ok && ui::UseCustomFont(clock.custom_font);
 
     Lock();
     s_refresh_in_flight = false;
     // Forced: something (boot, or Loading after a page change) waits on this
     // fetch and has to be replaced. Otherwise an error message stays up.
-    const bool forced = s_force_render;
+    const bool forced = s_force_render || font_changed;
     bool render = forced;
     s_force_render = false;
     const int pending_nav = s_pending_nav;
@@ -461,6 +506,10 @@ void HandleRefresh() {
         s_last_fetch_us = esp_timer_get_time();
         if (ApplyViewsLocked(std::move(views))) {
             render = true;
+        }
+        if (!(clock.weather == s_weather)) {
+            s_weather = clock.weather;
+            render = render || s_page == kHomePage;
         }
     }
     bool keep_scroll = true;
@@ -484,11 +533,15 @@ void HandleRefresh() {
 void HandleRedraw();
 
 void HandlePostAction(const Command& command) {
-    const bool ok = PostDeviceAction(command.plugin_id, command.item_id, command.checked);
+    const bool ok = PostDeviceAction(command.plugin_id, command.item_id, command.checked,
+                                     command.tap);
     Lock();
     --s_posts_pending;
-    if (!ok) {
-        EnqueueRefreshLocked();  // put the row back to what the backend really has
+    if (!ok || command.tap) {
+        // A failed toggle goes back to what the backend has; a tap row shows
+        // what the plugin made of it.
+        s_force_render = s_force_render || command.tap;
+        EnqueueRefreshLocked();
     }
     Unlock();
 }
@@ -702,7 +755,16 @@ void OnTap(int x, int y) {
             }
             View& view = s_views[view_index];
             const Item& item = view.items[hit.index];
-            if (item.checkable) {
+            if (item.tap_action) {
+                Command command = {};
+                command.type = CommandType::kPostAction;
+                command.tap = true;
+                CopyBounded(command.plugin_id, sizeof(command.plugin_id), view.plugin_id);
+                CopyBounded(command.item_id, sizeof(command.item_id), item.id);
+                if (xQueueSend(s_queue, &command, 0) == pdTRUE) {
+                    ++s_posts_pending;  // the screen redraws when the refresh lands
+                }
+            } else if (item.checkable) {
                 Command command = {};
                 command.type = CommandType::kPostAction;
                 command.checked = !item.checked;

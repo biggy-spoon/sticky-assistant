@@ -28,7 +28,8 @@ if [ ! -f "$symbols" ]; then
 fi
 mkdir -p "$out"
 
-# The same names and sizes as the bundled fonts, so ui.cpp needs no change.
+# The bundled fonts' sizes, named custom_* so the firmware carries both sets and
+# the device's Settings page can switch between them.
 # Characters: printable ASCII, the degree sign and the bullet, plus LVGL's
 # check and arrow symbols.
 make_font() {
@@ -39,11 +40,11 @@ make_font() {
         -o "$out/$name.c"
     echo "$name"
 }
-make_font sticky_sans_16 "$regular" 16
-make_font sticky_sans_18 "$regular" 18
-make_font sticky_sans_24 "$regular" 24
-make_font sticky_bold_18 "$bold" 18
-make_font sticky_bold_24 "$bold" 24
-make_font sticky_bold_34 "$bold" 34
-make_font sticky_bold_52 "$bold" 52
-echo "Fonts written to $out. Run idf.py fullclean, then build, to use them."
+make_font custom_sans_16 "$regular" 16
+make_font custom_sans_18 "$regular" 18
+make_font custom_sans_24 "$regular" 24
+make_font custom_bold_18 "$bold" 18
+make_font custom_bold_24 "$bold" 24
+make_font custom_bold_34 "$bold" 34
+make_font custom_bold_52 "$bold" 52
+echo "Fonts written to $out. Run idf.py build to use them."

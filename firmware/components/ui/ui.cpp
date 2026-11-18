@@ -29,6 +29,41 @@ LV_FONT_DECLARE(sticky_bold_18)
 LV_FONT_DECLARE(sticky_bold_24)
 LV_FONT_DECLARE(sticky_bold_34)
 LV_FONT_DECLARE(sticky_bold_52)
+#if STICKY_HAS_CUSTOM_FONT
+LV_FONT_DECLARE(custom_sans_16)
+LV_FONT_DECLARE(custom_sans_18)
+LV_FONT_DECLARE(custom_sans_24)
+LV_FONT_DECLARE(custom_bold_18)
+LV_FONT_DECLARE(custom_bold_24)
+LV_FONT_DECLARE(custom_bold_34)
+LV_FONT_DECLARE(custom_bold_52)
+#endif
+
+// The fonts in use: Liberation Sans, or the custom set when there is one and
+// the Settings page asks for it. Changed only on the UI task, between screens.
+namespace {
+struct FontSet {
+    const lv_font_t* sans_16;
+    const lv_font_t* sans_18;
+    const lv_font_t* sans_24;
+    const lv_font_t* bold_18;
+    const lv_font_t* bold_24;
+    const lv_font_t* bold_34;
+    const lv_font_t* bold_52;
+};
+const FontSet kDefaultFonts = {&sticky_sans_16, &sticky_sans_18, &sticky_sans_24, &sticky_bold_18,
+                               &sticky_bold_24, &sticky_bold_34, &sticky_bold_52};
+#if STICKY_HAS_CUSTOM_FONT
+const FontSet kCustomFonts = {&custom_sans_16, &custom_sans_18, &custom_sans_24, &custom_bold_18,
+                              &custom_bold_24, &custom_bold_34, &custom_bold_52};
+const FontSet* g_fonts = &kCustomFonts;
+#else
+const FontSet* g_fonts = &kDefaultFonts;
+#endif
+// What the Settings page last asked for. The UI task switches g_fonts to it
+// when it next builds a screen, never halfway through one.
+std::atomic<const FontSet*> g_wanted_fonts{g_fonts};
+}  // namespace
 
 namespace ui {
 namespace {
@@ -54,8 +89,6 @@ constexpr int kGhostBudget = 60;
 constexpr int kGhostCostUser = 5;
 constexpr int kGhostCostTick = 1;
 
-const lv_font_t* const kBarFont = &sticky_sans_24;
-const lv_font_t* const kBarBold = &sticky_bold_24;
 
 struct Rect {
     lv_coord_t x1, y1, x2, y2;
@@ -302,6 +335,11 @@ lv_obj_t* Rule(lv_obj_t* parent, lv_coord_t x, lv_coord_t y, lv_coord_t w, lv_co
 }
 
 lv_obj_t* NewScreen() {
+    const FontSet* wanted = g_wanted_fonts.load();
+    if (wanted != g_fonts) {
+        g_fonts = wanted;
+        s_screen_key.clear();  // all the text changes: a full refresh
+    }
     lv_obj_t* screen = lv_obj_create(nullptr);
     lv_obj_set_style_bg_color(screen, lv_color_white(), 0);
     lv_obj_set_style_bg_opa(screen, LV_OPA_COVER, 0);
@@ -460,7 +498,7 @@ void CalendarIcon(lv_obj_t* c, int cx, int cy, int s) {
     FillRect(c, x + w * 3 / 4 - 3, y - 6, 7, 14, 3);
     char day[4];
     snprintf(day, sizeof(day), "%d", s_time_known ? LocalTm(Now()).tm_mday : 1);
-    const lv_font_t* font = &sticky_bold_24;
+    const lv_font_t* font = g_fonts->bold_24;
     const int text_h = lv_font_get_line_height(font);
     const int box_top = y + h / 4;
     const int box_h = h * 3 / 4 - t;
@@ -520,6 +558,115 @@ void WeatherIcon(lv_obj_t* c, int cx, int cy, int s) {  // a sun behind a cloud
     FillRect(c, bx + t, by - 14, bw - 2 * t, 8, 0, false);  // clear the joins inside
 }
 
+// The weather icons: a sun, a moon, clouds, and what falls from them.
+void Sun(lv_obj_t* c, int cx, int cy, int r, int t) {
+    static const int kDx[] = {0, 7, 10, 7, 0, -7, -10, -7};
+    static const int kDy[] = {-10, -7, 0, 7, 10, 7, 0, -7};
+    for (int i = 0; i < 8; ++i) {
+        Line(c, cx + kDx[i] * (r + 4) / 10, cy + kDy[i] * (r + 4) / 10, cx + kDx[i] * (r + 10) / 10,
+             cy + kDy[i] * (r + 10) / 10, t);
+    }
+    Circle(c, cx, cy, r);
+    Circle(c, cx, cy, r - t, false);
+}
+
+void Moon(lv_obj_t* c, int cx, int cy, int r) {
+    Circle(c, cx, cy, r);
+    Circle(c, cx + r / 2, cy - r / 3, r - 2, false);
+}
+
+// An outlined cloud whose base runs from x to x + w at y.
+void Cloud(lv_obj_t* c, int x, int y, int w, int t) {
+    const int h = w / 3;
+    FillRect(c, x, y - h, w, h, h / 2);
+    Circle(c, x + w / 3, y - h, h * 2 / 3);
+    Circle(c, x + w * 2 / 3, y - h - h / 3, h);
+    FillRect(c, x + t, y - h + t, w - 2 * t, h - 2 * t, h / 2 - t, false);
+    Circle(c, x + w / 3, y - h, h * 2 / 3 - t, false);
+    Circle(c, x + w * 2 / 3, y - h - h / 3, h - t, false);
+    FillRect(c, x + t, y - h - 2, w - 2 * t, h / 2, 0, false);  // the seams inside
+}
+
+enum class Sky { kClear, kPartly, kCloudy, kFog, kRain, kSnow, kStorm };
+
+Sky SkyFor(int code) {
+    if (code <= 1) return Sky::kClear;
+    if (code == 2) return Sky::kPartly;
+    if (code == 3) return Sky::kCloudy;
+    if (code == 45 || code == 48) return Sky::kFog;
+    if ((code >= 71 && code <= 77) || code == 85 || code == 86) return Sky::kSnow;
+    if (code >= 95) return Sky::kStorm;
+    return Sky::kRain;  // drizzle, rain, freezing rain, showers
+}
+
+void WeatherNowIcon(lv_obj_t* c, int size, int code, bool daytime) {  // drawn in size x size
+    const int t = 3;
+    const int cx = size / 2;
+    switch (SkyFor(code)) {
+        case Sky::kClear:
+            if (daytime) {
+                Sun(c, cx, cx, size / 5, t);
+            } else {
+                Moon(c, cx, cx, size / 3);
+            }
+            break;
+        case Sky::kPartly:
+            if (daytime) {
+                Sun(c, size * 2 / 3, size / 3, size / 7, t);
+            } else {
+                Moon(c, size * 2 / 3, size / 3, size / 5);
+            }
+            Cloud(c, 4, size * 3 / 4, size * 2 / 3, t);
+            break;
+        case Sky::kCloudy:
+            Cloud(c, 4, size * 2 / 3, size - 8, t);
+            break;
+        case Sky::kFog:
+            for (int i = 0; i < 4; ++i) {
+                Line(c, 6 + (i % 2) * 6, size / 4 + i * size / 6, size - 6 - ((i + 1) % 2) * 6,
+                     size / 4 + i * size / 6, t);
+            }
+            break;
+        case Sky::kRain:
+        case Sky::kSnow:
+        case Sky::kStorm: {
+            const Sky sky = SkyFor(code);
+            Cloud(c, 4, size / 2 + 4, size - 8, t);
+            for (int i = 0; i < 3; ++i) {
+                const int x = size / 4 + i * size / 4;
+                const int y = size / 2 + 12;
+                if (sky == Sky::kSnow) {
+                    Circle(c, x, y + 6, 3);
+                } else if (sky == Sky::kRain) {
+                    Line(c, x + 3, y, x - 3, y + 14, t);
+                }
+            }
+            if (sky == Sky::kStorm) {  // a lightning bolt
+                const int x = size / 2 - 6;
+                const int y = size / 2 + 6;
+                Polygon(c, {{static_cast<lv_coord_t>(x + 10), static_cast<lv_coord_t>(y)},
+                            {static_cast<lv_coord_t>(x), static_cast<lv_coord_t>(y + 14)},
+                            {static_cast<lv_coord_t>(x + 7), static_cast<lv_coord_t>(y + 14)}});
+                Polygon(c, {{static_cast<lv_coord_t>(x + 4), static_cast<lv_coord_t>(y + 26)},
+                            {static_cast<lv_coord_t>(x + 14), static_cast<lv_coord_t>(y + 11)},
+                            {static_cast<lv_coord_t>(x + 7), static_cast<lv_coord_t>(y + 11)}});
+            }
+            break;
+        }
+    }
+}
+
+void SettingsIcon(lv_obj_t* c, int cx, int cy, int s) {  // a gear
+    const int r = s / 2 - 4;
+    static const int kDx[] = {0, 7, 10, 7, 0, -7, -10, -7};
+    static const int kDy[] = {-10, -7, 0, 7, 10, 7, 0, -7};
+    for (int i = 0; i < 8; ++i) {  // teeth
+        Line(c, cx, cy, cx + kDx[i] * (r + 5) / 10, cy + kDy[i] * (r + 5) / 10, 9);
+    }
+    Circle(c, cx, cy, r);
+    Circle(c, cx, cy, r / 2 - 1, false);
+}
+
 void GenericIcon(lv_obj_t* c, int cx, int cy, int s) {
     const int r = s / 2;
     StrokeRect(c, cx - r, cy - r, s, s, 8, 3);
@@ -532,7 +679,7 @@ void GenericIcon(lv_obj_t* c, int cx, int cy, int s) {
 void Badge(lv_obj_t* c, int cx, int cy, int number) {
     char text[6];
     snprintf(text, sizeof(text), number > 99 ? "99+" : "%d", number);
-    const lv_font_t* font = &sticky_bold_18;
+    const lv_font_t* font = g_fonts->bold_18;
     const int w = LV_MAX(30, TextWidth(font, text) + 16);
     FillRect(c, cx - w / 2 - 2, cy - 17, w + 4, 34, 17, false);
     FillRect(c, cx - w / 2, cy - 15, w, 30, 15);
@@ -560,7 +707,7 @@ void DrawPageDots(lv_obj_t* c, int right, int y, PagePos page) {
     const int max_start = page.total > kPageDotCount ? page.total - kPageDotCount : 0;
     const int start = LV_CLAMP(0, page.index - 1, max_start);
     const int count = LV_MIN(page.total, kPageDotCount);
-    const lv_font_t* arrows = &sticky_bold_18;
+    const lv_font_t* arrows = g_fonts->bold_18;
     const bool more_left = start > 0;
     const bool more_right = start + kPageDotCount < page.total;
     const int arrow_w = TextWidth(arrows, LV_SYMBOL_RIGHT) + 6;
@@ -602,8 +749,8 @@ void DrawBarRight() {
     } else {
         snprintf(percent, sizeof(percent), "--");
     }
-    const int percent_w = TextWidth(kBarBold, percent);
-    Text(c, right - percent_w, (kBarH - 2 - lv_font_get_line_height(kBarBold)) / 2, kBarBold,
+    const int percent_w = TextWidth(g_fonts->bold_24, percent);
+    Text(c, right - percent_w, (kBarH - 2 - lv_font_get_line_height(g_fonts->bold_24)) / 2, g_fonts->bold_24,
          percent);
     right -= percent_w + 12;
     if (power.usb_power) {
@@ -652,9 +799,9 @@ void BuildBar(lv_obj_t* screen, const std::string& title, bool show_house, PageP
         lv_obj_t* house = Canvas(left, 24, 22);
         HouseIcon(house, 1, 1);
     }
-    s_bar.time = Label(left, kBarBold, "", LV_LABEL_LONG_CLIP);
+    s_bar.time = Label(left, g_fonts->bold_24, "", LV_LABEL_LONG_CLIP);
     UpdateBarTime();
-    lv_obj_t* name = Label(left, kBarFont, SanitizeText(title), LV_LABEL_LONG_DOT);
+    lv_obj_t* name = Label(left, g_fonts->sans_24, SanitizeText(title), LV_LABEL_LONG_DOT);
     lv_obj_set_style_max_width(name, 300, 0);
 
     s_bar.page = page;
@@ -676,7 +823,7 @@ lv_obj_t* ScrollArea(lv_obj_t* screen, lv_coord_t x, lv_coord_t y, lv_coord_t w,
     lv_obj_set_flex_flow(area, LV_FLEX_FLOW_COLUMN);
     s_scroll_area = area;
     s_scroll_kind = kind;
-    s_footer = Label(screen, &sticky_sans_18, "", LV_LABEL_LONG_CLIP);
+    s_footer = Label(screen, g_fonts->sans_18, "", LV_LABEL_LONG_CLIP);
     lv_obj_align(s_footer, LV_ALIGN_BOTTOM_MID, 0, -6);
     return area;
 }
@@ -782,7 +929,7 @@ void AddSleepBanner(lv_obj_t* screen) {
     lv_obj_set_style_border_width(banner, 3, 0);
     lv_obj_set_style_border_color(banner, lv_color_white(), 0);
     lv_obj_set_style_pad_hor(banner, 24, 0);
-    lv_obj_t* text = Label(banner, &sticky_bold_24, "Asleep  -  press any button to wake",
+    lv_obj_t* text = Label(banner, g_fonts->bold_24, "Asleep  -  press any button to wake",
                            LV_LABEL_LONG_CLIP);
     lv_obj_set_style_text_color(text, lv_color_white(), 0);
     lv_obj_center(text);
@@ -842,10 +989,10 @@ void Message(lv_obj_t* screen, const std::string& title, const std::string& deta
     lv_obj_set_flex_flow(box, LV_FLEX_FLOW_COLUMN);
     lv_obj_set_flex_align(box, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
     lv_obj_set_style_pad_row(box, 16, 0);
-    lv_obj_t* big = Label(box, &sticky_bold_34, SanitizeText(title), LV_LABEL_LONG_WRAP, kW - 160);
+    lv_obj_t* big = Label(box, g_fonts->bold_34, SanitizeText(title), LV_LABEL_LONG_WRAP, kW - 160);
     lv_obj_set_style_text_align(big, LV_TEXT_ALIGN_CENTER, 0);
     if (!detail.empty()) {
-        lv_obj_t* small = Label(box, &sticky_sans_24, SanitizeText(detail), LV_LABEL_LONG_WRAP, kW - 160);
+        lv_obj_t* small = Label(box, g_fonts->sans_24, SanitizeText(detail), LV_LABEL_LONG_WRAP, kW - 160);
         lv_obj_set_style_text_align(small, LV_TEXT_ALIGN_CENTER, 0);
     }
     lv_obj_align(box, LV_ALIGN_CENTER, 0, kBarH / 2);
@@ -868,8 +1015,9 @@ void UpdateHomeClock() {
     const struct tm now = LocalTm(Now());
     lv_label_set_text(s_home_time, ClockText(now).c_str());
     lv_label_set_text(s_home_ampm, now.tm_hour < 12 ? "AM" : "PM");
-    char date[48];
-    snprintf(date, sizeof(date), "%s, %s %d", kWeekdays[now.tm_wday], kMonths[now.tm_mon], now.tm_mday);
+    char date[24];
+    snprintf(date, sizeof(date), "%.3s, %.3s %d", kWeekdays[now.tm_wday], kMonths[now.tm_mon],
+             now.tm_mday);
     lv_label_set_text(s_home_date, date);
 }
 
@@ -896,12 +1044,13 @@ void DrawTile(lv_obj_t* screen, const Tile& tile, int slot, lv_coord_t grid_top)
         case TileIcon::kCalendar: CalendarIcon(art, cx, cy, 54); break;
         case TileIcon::kChecklist: ChecklistIcon(art, cx, cy, 54); break;
         case TileIcon::kWeather: WeatherIcon(art, cx, cy, 54); break;
+        case TileIcon::kSettings: SettingsIcon(art, cx, cy, 54); break;
         case TileIcon::kGeneric: GenericIcon(art, cx, cy, 50); break;
     }
     if (tile.badge > 0) {
         Badge(art, 8 + kTile - 6, 16, tile.badge);
     }
-    lv_obj_t* name = Label(cell, &sticky_sans_24, SanitizeText(tile.title), LV_LABEL_LONG_DOT, kCellW - 8);
+    lv_obj_t* name = Label(cell, g_fonts->sans_24, SanitizeText(tile.title), LV_LABEL_LONG_DOT, kCellW - 8);
     lv_obj_set_style_text_align(name, LV_TEXT_ALIGN_CENTER, 0);
     lv_obj_align(name, LV_ALIGN_TOP_MID, 0, 112);
 }
@@ -920,15 +1069,17 @@ void RenderHome(const HomeInfo& info, PagePos page) {
     lv_obj_set_flex_flow(clock_row, LV_FLEX_FLOW_ROW);
     lv_obj_set_flex_align(clock_row, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_END, LV_FLEX_ALIGN_END);
     lv_obj_set_style_pad_column(clock_row, 8, 0);
-    s_home_time = Label(clock_row, &sticky_bold_52, "", LV_LABEL_LONG_CLIP);
-    s_home_ampm = Label(clock_row, &sticky_sans_24, "", LV_LABEL_LONG_CLIP);
+    s_home_time = Label(clock_row, g_fonts->bold_52, "", LV_LABEL_LONG_CLIP);
+    s_home_ampm = Label(clock_row, g_fonts->sans_24, "", LV_LABEL_LONG_CLIP);
     lv_obj_set_style_pad_bottom(s_home_ampm, 10, 0);
-    s_home_date = Label(screen, &sticky_sans_24, "", LV_LABEL_LONG_CLIP);
+    s_home_date = Label(screen, g_fonts->sans_24, "", LV_LABEL_LONG_CLIP);
     lv_obj_set_pos(s_home_date, kGutter, kBarH + 74);
     UpdateHomeClock();
 
-    constexpr lv_coord_t kRightX = kW / 2 + 30;
-    constexpr lv_coord_t kRightW = kW - kRightX - kGutter;
+    // Three columns: the clock, what's next, and the weather now.
+    constexpr lv_coord_t kWeatherW = 190;
+    constexpr lv_coord_t kRightX = 266;
+    const lv_coord_t kRightW = (info.has_weather ? kW - kWeatherW - 16 : kW - kGutter) - kRightX;
     std::string when;
     std::string what;
     if (info.has_next_event) {
@@ -949,10 +1100,10 @@ void RenderHome(const HomeInfo& info, PagePos page) {
     }
     if (!what.empty()) {
         if (!when.empty()) {
-            lv_obj_t* label = Label(screen, &sticky_bold_18, "NEXT  " + when, LV_LABEL_LONG_DOT, kRightW);
+            lv_obj_t* label = Label(screen, g_fonts->bold_18, "NEXT  " + when, LV_LABEL_LONG_DOT, kRightW);
             lv_obj_set_pos(label, kRightX, kBarH + 16);
         }
-        lv_obj_t* title = Label(screen, &sticky_bold_24, SanitizeText(what), LV_LABEL_LONG_DOT, kRightW);
+        lv_obj_t* title = Label(screen, g_fonts->bold_24, SanitizeText(what), LV_LABEL_LONG_DOT, kRightW);
         lv_obj_set_pos(title, kRightX, kBarH + 42);
     }
     if (info.open_todos >= 0) {
@@ -963,13 +1114,32 @@ void RenderHome(const HomeInfo& info, PagePos page) {
             snprintf(todos, sizeof(todos), "%d todo%s to do", info.open_todos,
                      info.open_todos == 1 ? "" : "s");
         }
-        lv_obj_t* label = Label(screen, &sticky_sans_18, todos, LV_LABEL_LONG_DOT, kRightW);
+        lv_obj_t* label = Label(screen, g_fonts->sans_18, todos, LV_LABEL_LONG_DOT, kRightW);
         lv_obj_set_pos(label, kRightX, kBarH + 80);
     }
     if (!info.wifi_connected) {
-        lv_obj_t* label = Label(screen, &sticky_sans_18, "No WiFi: Claude and plugins can't load",
+        lv_obj_t* label = Label(screen, g_fonts->sans_18, "No WiFi: Claude and plugins can't load",
                                 LV_LABEL_LONG_DOT, kRightW);
         lv_obj_set_pos(label, kRightX, kBarH + 80);
+    }
+
+    if (info.has_weather) {
+        lv_obj_t* corner = Plain(screen);
+        lv_obj_set_pos(corner, kW - kWeatherW - kGutter / 2, kBarH + 10);
+        lv_obj_set_size(corner, kWeatherW, 100);
+        Rule(corner, 0, 4, 1, 92);  // set apart from what's next
+        lv_obj_t* icon = Canvas(corner, 64, 64);
+        lv_obj_set_pos(icon, 14, 2);
+        WeatherNowIcon(icon, 64, info.weather_code, info.daytime);
+        char temp[12];
+        snprintf(temp, sizeof(temp), "%d\xC2\xB0%c", info.temperature, info.temperature_unit);
+        lv_obj_t* temp_label = Label(corner, g_fonts->bold_34, temp, LV_LABEL_LONG_CLIP);
+        lv_obj_set_pos(temp_label, 86, 14);
+        if (info.weather_as_of > 0) {
+            const std::string as_of = "as of " + ClockText12(LocalTm(info.weather_as_of));
+            lv_obj_t* note = Label(corner, g_fonts->sans_16, as_of, LV_LABEL_LONG_CLIP);
+            lv_obj_set_pos(note, 16, 72);
+        }
     }
 
     constexpr lv_coord_t kGridTop = kBarH + 120;
@@ -994,13 +1164,13 @@ void RenderClaude(const std::string& transcript, const std::string& reply, PageP
     }
     lv_obj_t* area = ScrollArea(screen, kGutter, kBarH + 14, kW - 2 * kGutter, ScrollKind::kText);
     lv_obj_set_style_pad_row(area, 8, 0);
-    Label(area, &sticky_bold_18, "YOU SAID", LV_LABEL_LONG_CLIP);
-    Label(area, &sticky_sans_24, transcript, LV_LABEL_LONG_WRAP, kW - 2 * kGutter);
+    Label(area, g_fonts->bold_18, "YOU SAID", LV_LABEL_LONG_CLIP);
+    Label(area, g_fonts->sans_24, transcript, LV_LABEL_LONG_WRAP, kW - 2 * kGutter);
     lv_obj_t* gap = Plain(area);
     lv_obj_set_size(gap, kW - 2 * kGutter, 14);
     Rule(gap, 0, 6, kW - 2 * kGutter, 1);
-    Label(area, &sticky_bold_18, "CLAUDE", LV_LABEL_LONG_CLIP);
-    Label(area, &sticky_sans_24, reply, LV_LABEL_LONG_WRAP, kW - 2 * kGutter);
+    Label(area, g_fonts->bold_18, "CLAUDE", LV_LABEL_LONG_CLIP);
+    Label(area, g_fonts->sans_24, reply, LV_LABEL_LONG_WRAP, kW - 2 * kGutter);
     RestoreScroll("claude", false);
     Present(screen, "claude");
 }
@@ -1037,7 +1207,7 @@ void AddListRow(lv_obj_t* area, const ListRow& row, int index) {
         lv_obj_set_style_border_width(box, 2, 0);
         lv_obj_set_style_border_color(box, lv_color_black(), 0);
         if (row.checked) {
-            lv_obj_t* mark = Label(box, &sticky_bold_18, LV_SYMBOL_OK, LV_LABEL_LONG_CLIP);
+            lv_obj_t* mark = Label(box, g_fonts->bold_18, LV_SYMBOL_OK, LV_LABEL_LONG_CLIP);
             lv_obj_center(mark);
         }
     } else {
@@ -1059,17 +1229,17 @@ void AddListRow(lv_obj_t* area, const ListRow& row, int index) {
     lv_obj_set_style_pad_row(column, 2, 0);
     // Open items stand out in bold; finished ones go plain and struck through.
     const bool bold = row.checkable && !row.checked;
-    lv_obj_t* text = Label(column, bold ? &sticky_bold_24 : &sticky_sans_24, row.text);
+    lv_obj_t* text = Label(column, bold ? g_fonts->bold_24 : g_fonts->sans_24, row.text);
     lv_obj_set_width(text, lv_pct(100));
     if (row.checked) {
         lv_obj_set_style_text_decor(text, LV_TEXT_DECOR_STRIKETHROUGH, 0);
     }
     if (!row.secondary.empty()) {
-        lv_obj_t* secondary = Label(column, &sticky_sans_18, row.secondary);
+        lv_obj_t* secondary = Label(column, g_fonts->sans_18, row.secondary);
         lv_obj_set_width(secondary, lv_pct(100));
     }
     if (row.has_detail) {
-        Label(obj, &sticky_sans_18, LV_SYMBOL_RIGHT, LV_LABEL_LONG_CLIP);
+        Label(obj, g_fonts->sans_18, LV_SYMBOL_RIGHT, LV_LABEL_LONG_CLIP);
     }
 }
 
@@ -1083,7 +1253,7 @@ void RenderList(const std::string& title, const std::vector<ListRow>& rows, Page
         AddListRow(area, rows[i], static_cast<int>(i));
     }
     if (rows.empty()) {
-        lv_obj_t* empty = Label(area, &sticky_sans_24, "Nothing here yet.", LV_LABEL_LONG_WRAP,
+        lv_obj_t* empty = Label(area, g_fonts->sans_24, "Nothing here yet.", LV_LABEL_LONG_WRAP,
                                 kW - 2 * kGutter);
         lv_obj_set_style_pad_top(empty, 24, 0);
     }
@@ -1161,20 +1331,20 @@ void AgendaCard(lv_obj_t* screen, const std::vector<AgendaItem>& items) {
         sub = "Nothing in the next 30 days";
     }
 
-    lv_obj_t* tag_label = Label(card, &sticky_bold_18, tag, LV_LABEL_LONG_CLIP);
+    lv_obj_t* tag_label = Label(card, g_fonts->bold_18, tag, LV_LABEL_LONG_CLIP);
     lv_obj_set_style_text_color(tag_label, lv_color_white(), 0);
     lv_obj_align(tag_label, LV_ALIGN_TOP_LEFT, 0, 0);
     if (!corner.empty()) {
-        lv_obj_t* corner_label = Label(card, &sticky_bold_18, corner, LV_LABEL_LONG_CLIP);
+        lv_obj_t* corner_label = Label(card, g_fonts->bold_18, corner, LV_LABEL_LONG_CLIP);
         lv_obj_set_style_text_color(corner_label, lv_color_white(), 0);
         lv_obj_align(corner_label, LV_ALIGN_TOP_RIGHT, 0, 0);
     }
-    lv_obj_t* title_label = Label(card, &sticky_bold_34, SanitizeText(title), LV_LABEL_LONG_DOT,
+    lv_obj_t* title_label = Label(card, g_fonts->bold_34, SanitizeText(title), LV_LABEL_LONG_DOT,
                                   kAgendaLeftW - 32);
-    lv_obj_set_height(title_label, 2 * lv_font_get_line_height(&sticky_bold_34));
+    lv_obj_set_height(title_label, 2 * lv_font_get_line_height(g_fonts->bold_34));
     lv_obj_set_style_text_color(title_label, lv_color_white(), 0);
     lv_obj_align(title_label, LV_ALIGN_TOP_LEFT, 0, 28);
-    lv_obj_t* sub_label = Label(card, &sticky_sans_18, sub, LV_LABEL_LONG_DOT, kAgendaLeftW - 32);
+    lv_obj_t* sub_label = Label(card, g_fonts->sans_18, sub, LV_LABEL_LONG_DOT, kAgendaLeftW - 32);
     lv_obj_set_style_text_color(sub_label, lv_color_white(), 0);
     lv_obj_align(sub_label, LV_ALIGN_BOTTOM_LEFT, 0, 0);
 }
@@ -1190,7 +1360,7 @@ void WeekStrip(lv_obj_t* screen, const std::vector<AgendaItem>& items) {
     for (int i = 0; i < 7; ++i) {
         const int64_t day = week_start + i;
         const lv_coord_t x = 12 + i * kColW;
-        lv_obj_t* letter = Label(screen, &sticky_sans_18, kLetters[i], LV_LABEL_LONG_CLIP);
+        lv_obj_t* letter = Label(screen, g_fonts->sans_18, kLetters[i], LV_LABEL_LONG_CLIP);
         lv_obj_set_width(letter, kColW);
         lv_obj_set_style_text_align(letter, LV_TEXT_ALIGN_CENTER, 0);
         lv_obj_set_pos(letter, x, kTop);
@@ -1206,7 +1376,7 @@ void WeekStrip(lv_obj_t* screen, const std::vector<AgendaItem>& items) {
             lv_obj_set_style_bg_opa(holder, LV_OPA_COVER, 0);
             lv_obj_set_style_bg_color(holder, lv_color_black(), 0);
         }
-        lv_obj_t* number_label = Label(holder, &sticky_bold_18, number, LV_LABEL_LONG_CLIP);
+        lv_obj_t* number_label = Label(holder, g_fonts->bold_18, number, LV_LABEL_LONG_CLIP);
         lv_obj_set_style_text_color(number_label, day == today ? lv_color_white() : lv_color_black(), 0);
         lv_obj_center(number_label);
 
@@ -1234,7 +1404,7 @@ void AgendaHeading(lv_obj_t* area, const std::string& text) {
     lv_obj_set_style_border_side(heading, LV_BORDER_SIDE_BOTTOM, 0);
     lv_obj_set_style_border_width(heading, 2, 0);
     lv_obj_set_style_border_color(heading, lv_color_black(), 0);
-    lv_obj_t* label = Label(heading, &sticky_bold_24, text, LV_LABEL_LONG_DOT);
+    lv_obj_t* label = Label(heading, g_fonts->bold_24, text, LV_LABEL_LONG_DOT);
     lv_obj_set_width(label, lv_pct(100));
 }
 
@@ -1255,14 +1425,14 @@ void AgendaRow(lv_obj_t* area, const AgendaItem& item, int index, bool is_now) {
         lv_obj_set_style_bg_color(marker, lv_color_black(), 0);
     }
     lv_obj_t* when = item.all_day
-                         ? Label(row, &sticky_sans_18, "All day", LV_LABEL_LONG_CLIP, 112)
-                         : Label(row, &sticky_sans_24, ClockText12(LocalTm(item.start)),
+                         ? Label(row, g_fonts->sans_18, "All day", LV_LABEL_LONG_CLIP, 112)
+                         : Label(row, g_fonts->sans_24, ClockText12(LocalTm(item.start)),
                                  LV_LABEL_LONG_CLIP, 112);
     (void)when;
-    lv_obj_t* title = Label(row, &sticky_bold_24, item.text, LV_LABEL_LONG_DOT);
+    lv_obj_t* title = Label(row, g_fonts->bold_24, item.text, LV_LABEL_LONG_DOT);
     lv_obj_set_flex_grow(title, 1);
     if (item.has_detail) {
-        Label(row, &sticky_sans_18, LV_SYMBOL_RIGHT, LV_LABEL_LONG_CLIP);
+        Label(row, g_fonts->sans_18, LV_SYMBOL_RIGHT, LV_LABEL_LONG_CLIP);
     }
 }
 
@@ -1291,7 +1461,7 @@ void RenderAgenda(const std::string& title, const std::vector<AgendaItem>& items
         if (row_day != shown_day) {
             if (!today_shown && row_day > today) {
                 AgendaHeading(area, DayHeading(today, today, LocalTm(now)));
-                lv_obj_t* none = Label(area, &sticky_sans_24, "Nothing else today", LV_LABEL_LONG_CLIP);
+                lv_obj_t* none = Label(area, g_fonts->sans_24, "Nothing else today", LV_LABEL_LONG_CLIP);
                 lv_obj_set_style_pad_ver(none, 8, 0);
                 today_shown = true;
             }
@@ -1304,7 +1474,7 @@ void RenderAgenda(const std::string& title, const std::vector<AgendaItem>& items
     }
     if (shown_day < 0) {
         AgendaHeading(area, DayHeading(today, today, LocalTm(now)));
-        Label(area, &sticky_sans_24, "Nothing in the next 30 days", LV_LABEL_LONG_CLIP);
+        Label(area, g_fonts->sans_24, "Nothing in the next 30 days", LV_LABEL_LONG_CLIP);
     }
     RestoreScroll("agenda:" + title, keep_scroll);
     Present(screen, "agenda:" + title);
@@ -1325,14 +1495,14 @@ void RenderDetail(const std::string& title, const std::string& body, PagePos pag
     lv_obj_set_flex_align(header, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
     lv_obj_set_style_pad_column(header, 12, 0);
     if (with_back) {
-        Label(header, &sticky_bold_24, LV_SYMBOL_LEFT, LV_LABEL_LONG_CLIP);
+        Label(header, g_fonts->bold_24, LV_SYMBOL_LEFT, LV_LABEL_LONG_CLIP);
     }
-    lv_obj_t* heading = Label(header, &sticky_bold_34, SanitizeText(title), LV_LABEL_LONG_DOT);
+    lv_obj_t* heading = Label(header, g_fonts->bold_34, SanitizeText(title), LV_LABEL_LONG_DOT);
     lv_obj_set_flex_grow(heading, 1);
     Rule(screen, kGutter, kBarH + 64, kW - 2 * kGutter, 2);
 
     lv_obj_t* area = ScrollArea(screen, kGutter, kBarH + 76, kW - 2 * kGutter, ScrollKind::kText);
-    Label(area, &sticky_sans_24, SanitizeText(body), LV_LABEL_LONG_WRAP, kW - 2 * kGutter);
+    Label(area, g_fonts->sans_24, SanitizeText(body), LV_LABEL_LONG_WRAP, kW - 2 * kGutter);
     if (with_back) {
         lv_obj_t* body_target = Plain(screen);  // a tap anywhere below the bar goes back
         lv_obj_set_pos(body_target, 0, kBarH);
@@ -1502,6 +1672,18 @@ void SetClock(int64_t unix_now, int utc_offset_s) {
 bool TimeKnown() { return s_time_known; }
 
 void SetSleeping(bool sleeping) { s_sleeping = sleeping; }
+
+bool HasCustomFont() { return STICKY_HAS_CUSTOM_FONT != 0; }
+
+bool UseCustomFont(bool custom) {
+#if STICKY_HAS_CUSTOM_FONT
+    const FontSet* wanted = custom ? &kCustomFonts : &kDefaultFonts;
+#else
+    (void)custom;
+    const FontSet* wanted = &kDefaultFonts;
+#endif
+    return g_wanted_fonts.exchange(wanted) != wanted;
+}
 
 void ShowHome(const HomeInfo& info, PagePos page) {
     Post([info, page] { RenderHome(info, page); });

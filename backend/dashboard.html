@@ -342,6 +342,21 @@
         <input id="timezone" type="text" placeholder="e.g. America/New_York">
         <p class="hint">For the device's clock, its calendar and the todo list's reset at midnight. Blank uses this server's timezone.</p>
       </div>
+      <div class="field-group">
+        <label for="units">Units</label>
+        <select id="units">
+          <option value="imperial">Imperial: °F, mph</option>
+          <option value="metric">Metric: °C, km/h</option>
+        </select>
+      </div>
+      <div class="field-group">
+        <label for="device-font">Device font</label>
+        <select id="device-font">
+          <option value="custom">Your own font (if the firmware was built with one)</option>
+          <option value="default">Liberation Sans</option>
+        </select>
+        <p class="hint">See "Using your own font" in firmware/README.md. The weather location is under Plugins, Weather.</p>
+      </div>
       <div class="card-actions">
         <button type="button" class="btn" onclick="saveCoreSettings()">Save</button>
         <span class="save-msg" id="core-save-msg">
@@ -498,12 +513,16 @@
       const config = await fetch('/api/settings').then(r => r.json());
       document.getElementById('claude-model').value = config.claude_model || '';
       document.getElementById('timezone').value = config.timezone || '';
+      document.getElementById('units').value = config.units || 'imperial';
+      document.getElementById('device-font').value = config.device_font || 'custom';
     }
 
     async function saveCoreSettings() {
       const body = {
         claude_model: document.getElementById('claude-model').value,
         timezone: document.getElementById('timezone').value,
+        units: document.getElementById('units').value,
+        device_font: document.getElementById('device-font').value,
       };
       const key = document.getElementById('anthropic-key').value;
       if (key) body.anthropic_api_key = key;

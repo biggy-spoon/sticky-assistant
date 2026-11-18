@@ -107,7 +107,9 @@ class TodoPlugin(Plugin):
                   for t in storage.list_todos_done_since(_start_of_today())]
         return DeviceView(view_type="list", title="Todo list", items=items)
 
-    def device_action(self, item_id: str, checked: bool) -> None:
+    def device_action(self, item_id: str, checked: Optional[bool]) -> None:
+        if checked is None:
+            return
         try:
             todo_id = int(item_id)
         except ValueError:

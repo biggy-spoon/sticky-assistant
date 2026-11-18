@@ -23,7 +23,7 @@ struct PagePos {
     int total = 0;
 };
 
-enum class TileIcon { kClaude, kCalendar, kChecklist, kWeather, kGeneric };
+enum class TileIcon { kClaude, kCalendar, kChecklist, kWeather, kSettings, kGeneric };
 
 struct Tile {
     std::string title;
@@ -40,6 +40,13 @@ struct HomeInfo {
     int64_t next_start = 0;  // Unix time
     bool next_all_day = false;
     int open_todos = -1;  // -1: no todo list
+    // The weather now, for the top-right corner.
+    bool has_weather = false;
+    int temperature = 0;
+    char temperature_unit = 'F';
+    int weather_code = 0;  // WMO code, as Open-Meteo reports it
+    bool daytime = true;
+    int64_t weather_as_of = 0;  // Unix time of the reading
 };
 
 struct ListRow {
@@ -68,6 +75,12 @@ bool TimeKnown();
 // A small moon in the status bar from the next screen drawn on: the board is
 // asleep and the picture is frozen.
 void SetSleeping(bool sleeping);
+
+// Whether the firmware was built with a custom font (firmware/tools/make_fonts.sh).
+bool HasCustomFont();
+// Switches between the custom font and Liberation Sans. True if that changes
+// anything, in which case the caller should redraw.
+bool UseCustomFont(bool custom);
 
 void ShowHome(const HomeInfo& info, PagePos page);
 // An empty transcript shows how to start a conversation.

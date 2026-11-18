@@ -265,6 +265,8 @@ def api_get_settings() -> dict:
         "anthropic_api_key": redacted["anthropic_api_key"],
         "claude_model": settings.get_claude_model(),
         "timezone": settings.get_timezone_name(),
+        "units": settings.get_units(),
+        "device_font": settings.get_device_font(),
     }
 
 
@@ -283,6 +285,10 @@ async def api_set_settings(request: Request) -> dict:
             except (ZoneInfoNotFoundError, ValueError) as exc:
                 raise HTTPException(status_code=400, detail=f"Unknown timezone: {name}") from exc
         settings.set("timezone", name)
+    if body.get("units") in ("imperial", "metric"):
+        settings.set("units", body["units"])
+    if body.get("device_font") in ("custom", "default"):
+        settings.set("device_font", body["device_font"])
     return {"success": True}
 
 
@@ -345,13 +351,17 @@ def api_plugin_hub() -> dict:
 # --- Device screens (Up/Down button navigation on the ePaper panel) ----
 
 @app.get("/api/device/views")
-def api_device_views() -> dict:
+def api_device_views(fonts: str = "") -> dict:
     """Every configured plugin's own on-device screen, in a fixed order
     (plugin registration order), for the firmware to page through. The device's own home/conversation screen isn't
     included -- it's rendered locally by the firmware without a backend
     round-trip."""
+    from plugins import settings_plugin
+    settings_plugin.device_has_custom_font = "custom" in fonts.split(",")
     views = []
-    for plugin in plugins.all_plugins():
+    # Settings goes last, after the plugins it configures.
+    ordered = sorted(plugins.all_plugins(), key=lambda plugin: plugin.id == "settings")
+    for plugin in ordered:
         if not plugin.is_configured():
             continue
         view = plugin.device_view()
@@ -364,15 +374,24 @@ def api_device_views() -> dict:
             "body": view.body,
             "items": [{"id": item.id, "text": item.text, "secondary": item.secondary,
                        "detail": item.detail, "checked": item.checked,
-                       "start_ts": item.start_ts, "end_ts": item.end_ts, "all_day": item.all_day}
+                       "start_ts": item.start_ts, "end_ts": item.end_ts, "all_day": item.all_day,
+                       "action": item.action}
                       for item in (view.items or [])],
         })
     # The device has no clock of its own worth trusting, so it sets its time
     # from here, and shows it in the user's timezone.
     now = time.time()
     offset = datetime.fromtimestamp(now, settings.local_timezone()).utcoffset()
-    return {"views": views,
-            "clock": {"now": int(now), "utc_offset": int(offset.total_seconds()) if offset else 0}}
+    result = {"views": views,
+              "clock": {"now": int(now), "utc_offset": int(offset.total_seconds()) if offset else 0},
+              "device": {"font": settings.get_device_font()}}
+    weather = plugins.get("weather")
+    if weather is not None and weather.is_configured():
+        from plugins import weather_plugin
+        current = weather_plugin.current_conditions()
+        if current is not None:
+            result["weather"] = current  # the home screen's "now" corner
+    return result
 
 
 @app.post("/api/plugins/{plugin_id}/device-action")
@@ -384,8 +403,9 @@ async def api_plugin_device_action(plugin_id: str, request: Request) -> dict:
     item_id = body.get("item_id")
     if not item_id:
         raise HTTPException(status_code=400, detail="item_id is required")
+    # Checkable rows send the state they should now have; tap rows send none.
     checked = body.get("checked")
-    if not isinstance(checked, bool):
-        raise HTTPException(status_code=400, detail="checked must be true or false")
+    if checked is not None and not isinstance(checked, bool):
+        raise HTTPException(status_code=400, detail="checked must be true, false or absent")
     plugin.device_action(str(item_id), checked)
     return {"success": True}
