@@ -135,6 +135,11 @@ tracked under Unreleased until there's a first stable cut.
   browser. It adds the device's own settings (backend address, WiFi, sleep
   timeout, including never), and keeps the device awake while it's open. The
   backend no longer serves a dashboard; `/dashboard` redirects to the device.
+- Pages are ready at once: the backend builds each plugin's device screen in
+  the background and serves the latest copy (about 0.3s instead of 4-12s,
+  since the calendar asked iCloud on every request), and the device keeps the
+  last pages in a new 1MB flash partition and draws them about 2 seconds into
+  a boot or wake, before WiFi is up, then updates.
 - Plugins can be installed from the settings page or the device's Settings
   page, limited to hub entries marked reviewed, and load without a restart.
   The device's Settings page lists plugins and shows the settings page's
@@ -155,6 +160,9 @@ tracked under Unreleased until there's a first stable cut.
   `set_todo_done`.
 
 ### Fixed
+- Times on a page drawn from the cache, such as the weather's "as of", showed
+  in UTC until something changed: the cached timezone offset is now applied at
+  once, and the screen is redrawn when the clock first arrives.
 - The sleep screen looked grey and smudged: its last frame was a partial
   refresh, which leaves the panel greyer, and it stays up for hours. It's now a
   full refresh, as in Sticky OS.

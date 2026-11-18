@@ -230,6 +230,7 @@ extern "C" void app_main() {
         ESP_LOGE(kTag, "touch unavailable: %s", esp_err_to_name(err));
     }
 
+    device_nav::ShowCached(woke);
     const settings_service::Settings settings = settings_service::Get();
     ESP_LOGI(kTag, "%s, connecting to WiFi...", woke ? "woke from sleep" : "powered on");
     const bool wifi_connected =

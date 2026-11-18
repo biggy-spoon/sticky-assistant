@@ -20,6 +20,11 @@ namespace device_nav {
 
 esp_err_t Init();
 
+// Called once at boot, before WiFi: draws the pages saved in flash from the last
+// time the backend answered, back on the page that was showing before sleep,
+// so there's something real on screen while the network comes up.
+void ShowCached(bool woke_from_sleep);
+
 // Called once after the first WiFi connect attempt. With WiFi it fetches the
 // views and then draws; without it, it draws home straight away. After a wake
 // from sleep it returns to the page that was showing.

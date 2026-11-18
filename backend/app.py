@@ -27,6 +27,7 @@ from fastapi.responses import JSONResponse, RedirectResponse
 from faster_whisper import WhisperModel
 
 import ai_providers
+import device_views
 import plugin_hub
 import plugins
 import settings
@@ -103,6 +104,7 @@ plugin_hub.route_registrar = lambda plugin: plugin.register_routes(app)
 def load_models() -> None:
     global whisper_model
     storage.init_db()
+    device_views.start()
     log.info("Loading faster-whisper model=%s device=%s compute_type=%s",
               WHISPER_MODEL_SIZE, WHISPER_DEVICE, WHISPER_COMPUTE_TYPE)
     whisper_model = WhisperModel(WHISPER_MODEL_SIZE, device=WHISPER_DEVICE,
@@ -158,6 +160,7 @@ async def converse(request: Request) -> JSONResponse:
     log.info("transcript=%r reply=%r", transcript, reply)
     storage.log_conversation(transcript, reply, success=True)
     _remember(transcript, reply)
+    device_views.invalidate()  # the model may have changed a calendar, todos or settings
     return JSONResponse({"transcript": transcript, "reply": reply})
 
 
@@ -328,6 +331,7 @@ async def api_set_plugin_settings(plugin_id: str, request: Request) -> dict:
         # previously-saved secret with an empty string.
         if key in field_keys and value:
             settings.set(key, value)
+    device_views.invalidate()  # a setting can change any screen (e.g. the weather location)
     return {"success": True}
 
 
@@ -370,28 +374,12 @@ def api_device_views(fonts: str = "", font_name: str = "") -> dict:
     from plugins import settings_plugin
     settings_plugin.device_has_custom_font = "custom" in fonts.split(",")
     settings_plugin.device_custom_font_name = font_name.strip()[:40]
-    views = []
-    # Settings goes last, after the plugins it configures.
-    ordered = sorted(plugins.all_plugins(), key=lambda plugin: plugin.id == "settings")
-    for plugin in ordered:
-        if not plugin.is_configured():
-            continue
-        view = plugin.device_view()
-        if view is None:
-            continue
-        views.append({
-            "plugin_id": plugin.id,
-            "view_type": view.view_type,
-            "data": view.data,
-            "title": view.title,
-            "body": view.body,
-            "items": [{"id": item.id, "text": item.text, "secondary": item.secondary,
-                       "detail": item.detail, "checked": item.checked,
-                       "start_ts": item.start_ts, "end_ts": item.end_ts, "all_day": item.all_day,
-                       "action": item.action, "options": item.options or [],
-                       "value": item.value}
-                      for item in (view.items or [])],
-        })
+    # Settings goes last, after the plugins it configures. Screens come ready
+    # made from device_views, so this answers at once.
+    ordered = sorted((p for p in plugins.all_plugins() if p.is_configured()),
+                     key=lambda plugin: plugin.id == "settings")
+    views = [{"plugin_id": plugin.id, **view}
+             for plugin, view in device_views.views(ordered) if view is not None]
     # The device has no clock of its own worth trusting, so it sets its time
     # from here, and shows it in the user's timezone.
     now = time.time()
@@ -421,10 +409,12 @@ async def api_plugin_device_action(plugin_id: str, request: Request) -> dict:
         raise HTTPException(status_code=400, detail="item_id is required")
     if "value" in body:  # a pick from a list, or typed text
         plugin.device_input(str(item_id), str(body["value"]))
+        device_views.invalidate(plugin.id)
         return {"success": True}
     # Checkable rows send the state they should now have; tap rows send none.
     checked = body.get("checked")
     if checked is not None and not isinstance(checked, bool):
         raise HTTPException(status_code=400, detail="checked must be true, false or absent")
     plugin.device_action(str(item_id), checked)
+    device_views.invalidate(plugin.id)
     return {"success": True}

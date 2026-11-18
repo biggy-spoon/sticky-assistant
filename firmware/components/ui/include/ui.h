@@ -114,6 +114,10 @@ esp_err_t Init();
 // called the screens show no clock.
 void SetClock(int64_t unix_now, int utc_offset_s);
 bool TimeKnown();
+// Just the user's offset from UTC, for when the time itself isn't known yet
+// (straight after a power-on, drawing from the cache). Times shown, such as
+// the weather's "as of", are then in the right zone from the start.
+void SetUtcOffset(int utc_offset_s);
 
 // A small moon in the status bar from the next screen drawn on: the board is
 // asleep and the picture is frozen.

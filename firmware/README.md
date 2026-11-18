@@ -61,6 +61,7 @@ and reboots into normal operation.
 | `recording_service` | PSRAM clip buffer + WAV encoding |
 | `settings_service` | NVS-backed WiFi/backend settings, written by the portal |
 | `captive_portal` | First-run AP + DNS hijack + HTTP setup form |
+| `device_nav` cache | The last views response in the `storage` partition (`/cache/views.json`), drawn at boot before WiFi; rewritten only when the pages change |
 | `settings_web` | The settings page on port 80 (embedded `settings.html`), plus `/device/config` for the device's own settings and `/device/ping` to stay awake while the page is open |
 | `wifi_service` | STA connect (using `settings_service` values) + SoftAP mode |
 | `assistant_service` | POSTs the WAV to the backend, parses `{transcript, reply}` |

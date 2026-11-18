@@ -175,6 +175,12 @@ repository is MIT.
   `plugin_hub.install()` downloads, checks and loads it
   (`plugins.load_module()`) without a restart. Everything else is installed
   by hand.
+- `device_views.py` — each plugin's device screen, built in the background
+  every 90 seconds and served from memory, so `GET /api/device/views` answers
+  in well under a second. A copy older than two minutes is still served while
+  a new one is built; a tap, a settings change or a conversation rebuilds what
+  it touched. The device also keeps the last response in its `storage` flash
+  partition (SPIFFS) and draws from it at boot, before WiFi connects.
 - The settings page: a single dependency-free HTML/JS page, embedded in the
   firmware (`firmware/components/settings_web/settings.html`) and served by
   the device on port 80 while it's awake. Its own settings (backend address,
