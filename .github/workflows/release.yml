@@ -32,7 +32,7 @@ jobs:
           esp_idf_version: v5.3
           target: esp32s3
           path: "firmware"
-          command: idf.py build && esptool.py --chip esp32s3 merge_bin -o build/merged.bin @build/flash_args
+          command: idf.py build && cd build && esptool.py --chip esp32s3 merge_bin -o merged.bin @flash_args
       - name: Package
         run: |
           python3 scripts/package_release.py "$GITHUB_REF_NAME" --build firmware/build --out dist

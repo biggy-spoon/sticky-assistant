@@ -18,7 +18,7 @@ jobs:
           target: esp32s3
           path: "firmware"
           # The merged image is what the Playground's website form takes.
-          command: idf.py build && esptool.py --chip esp32s3 merge_bin -o build/merged.bin @build/flash_args
+          command: idf.py build && cd build && esptool.py --chip esp32s3 merge_bin -o merged.bin @flash_args
       - name: Package as a release would
         run: python3 scripts/package_release.py 0.0.0-ci --build firmware/build --out dist
       - uses: actions/upload-artifact@v4
