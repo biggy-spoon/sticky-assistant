@@ -946,7 +946,9 @@ void Present(lv_obj_t* screen, const std::string& key) {
     if (s_sleeping) {
         AddSleepBanner(screen);
     }
-    s_force_full = key != s_screen_key;
+    // The last frame before sleep stays up for hours, so it gets a full refresh:
+    // a partial one leaves the panel grey and smudged (as Sticky OS does).
+    s_force_full = key != s_screen_key || s_sleeping;
     s_screen_key = key;
     lv_obj_update_layout(screen);
     UpdateFooter();
