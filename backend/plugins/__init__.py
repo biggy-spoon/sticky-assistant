@@ -37,26 +37,35 @@ def get(plugin_id: str) -> Optional[Plugin]:
     return _plugins.get(plugin_id)
 
 
-def _discover() -> None:
-    for module_info in pkgutil.iter_modules(__path__):
-        if module_info.name == "base":
+def load_module(name: str) -> list[Plugin]:
+    """Imports plugins/<name>.py and registers each Plugin class it defines.
+    Returns the plugins it added. Used at startup and to load a plugin just
+    installed from the hub, without a restart."""
+    try:
+        module = importlib.import_module(f".{name}", package=__name__)
+    except Exception:
+        log.exception("Failed to import plugin module %r -- skipping it", name)
+        return []
+    added = []
+    for _, obj in inspect.getmembers(module, inspect.isclass):
+        # obj.__module__ check excludes names merely imported into this
+        # module (e.g. `from .base import Plugin`) -- only classes
+        # actually defined here should be registered.
+        if obj is Plugin or not issubclass(obj, Plugin) or obj.__module__ != module.__name__:
             continue
         try:
-            module = importlib.import_module(f".{module_info.name}", package=__name__)
+            plugin = obj()
+            register(plugin)
+            added.append(plugin)
         except Exception:
-            log.exception("Failed to import plugin module %r -- skipping it", module_info.name)
-            continue
-        for _, obj in inspect.getmembers(module, inspect.isclass):
-            # obj.__module__ check excludes names merely imported into this
-            # module (e.g. `from .base import Plugin`) -- only classes
-            # actually defined here should be registered.
-            if obj is Plugin or not issubclass(obj, Plugin) or obj.__module__ != module.__name__:
-                continue
-            try:
-                register(obj())
-            except Exception:
-                log.exception("Failed to load plugin %s from %r -- skipping it",
-                               obj.__name__, module_info.name)
+            log.exception("Failed to load plugin %s from %r -- skipping it", obj.__name__, name)
+    return added
+
+
+def _discover() -> None:
+    for module_info in pkgutil.iter_modules(__path__):
+        if module_info.name != "base":
+            load_module(module_info.name)
 
 
 _discover()

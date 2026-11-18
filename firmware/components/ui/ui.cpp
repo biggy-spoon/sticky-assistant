@@ -1989,6 +1989,8 @@ void SetClock(int64_t unix_now, int utc_offset_s) {
 
 bool TimeKnown() { return s_time_known; }
 
+void SetUtcOffset(int utc_offset_s) { s_utc_offset = utc_offset_s; }
+
 void SetSleeping(bool sleeping) { s_sleeping = sleeping; }
 
 void SetAssistantName(const std::string& name) {

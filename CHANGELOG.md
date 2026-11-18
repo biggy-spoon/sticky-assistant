@@ -131,6 +131,26 @@ tracked under Unreleased until there's a first stable cut.
 - The weather page in the style of Apple's Weather app, with a day view.
 - The battery log shows the current, the gauge's flags and the charger pin, to
   confirm charging.
+- The settings page moved onto the device: open the Sticky's address in a
+  browser. It adds the device's own settings (backend address, WiFi, sleep
+  timeout, including never), and keeps the device awake while it's open. The
+  backend no longer serves a dashboard; `/dashboard` redirects to the device.
+- The settings page picks the timezone, the AI model and the WiFi network from
+  dropdowns: every timezone the browser knows, the provider's model list, and
+  a scan the device runs (`GET /device/wifi`), each with a way to type one in.
+- A home page setting (Settings > Home page): the widgets, the assistant, or a
+  plugin's page such as the calendar. The device starts on it, a short AI press
+  goes back to it (and sleeps when already there), and tapping the status bar
+  goes to it, then on to the widgets, which stay in the page rotation.
+- Pages are ready at once: the backend builds each plugin's device screen in
+  the background and serves the latest copy (about 0.3s instead of 4-12s,
+  since the calendar asked iCloud on every request), and the device keeps the
+  last pages in a new 1MB flash partition and draws them about 2 seconds into
+  a boot or wake, before WiFi is up, then updates.
+- Plugins can be installed from the settings page or the device's Settings
+  page, limited to hub entries marked reviewed, and load without a restart.
+  The device's Settings page lists plugins and shows the settings page's
+  address.
 
 ### Changed
 - `/converse` transcribes and asks the model on a worker thread, so the device
@@ -147,6 +167,9 @@ tracked under Unreleased until there's a first stable cut.
   `set_todo_done`.
 
 ### Fixed
+- Times on a page drawn from the cache, such as the weather's "as of", showed
+  in UTC until something changed: the cached timezone offset is now applied at
+  once, and the screen is redrawn when the clock first arrives.
 - The sleep screen looked grey and smudged: its last frame was a partial
   refresh, which leaves the panel greyer, and it stays up for hours. It's now a
   full refresh, as in Sticky OS.

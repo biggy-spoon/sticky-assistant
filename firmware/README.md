@@ -13,7 +13,9 @@ tile, swipe left or right, or press Up/Down to move between pages, and tap the
 status bar to go home. Swipe up or down to scroll. Tap a checkable row to toggle
 it (e.g. a todo), or a row with details to open them (e.g. a calendar event). A
 short press of the AI button goes back: from details to the list, and from any
-other page to home. On home, a short press puts the board to sleep. A double
+other page to the home page. The home page is the widgets unless Settings >
+Home page picks another, such as the calendar; the widgets then stay one swipe
+away, and tapping the status bar on the home page goes to them. On home, a short press puts the board to sleep. A double
 press redraws the screen with a full refresh, which clears any faint traces the
 quick partial updates leave behind. A single press waits about a third of a
 second before acting, to tell it from a double press.
@@ -61,6 +63,8 @@ and reboots into normal operation.
 | `recording_service` | PSRAM clip buffer + WAV encoding |
 | `settings_service` | NVS-backed WiFi/backend settings, written by the portal |
 | `captive_portal` | First-run AP + DNS hijack + HTTP setup form |
+| `device_nav` cache | The last views response in the `storage` partition (`/cache/views.json`), drawn at boot before WiFi; rewritten only when the pages change |
+| `settings_web` | The settings page on port 80 (embedded `settings.html`), plus `/device/config` for the device's own settings and `/device/ping` to stay awake while the page is open |
 | `wifi_service` | STA connect (using `settings_service` values) + SoftAP mode |
 | `assistant_service` | POSTs the WAV to the backend, parses `{transcript, reply}` |
 | `device_nav` | Page changes, scrolling, taps and "back" across plugin device-views. Draws from a cached `GET /api/device/views` and refreshes in the background; sends toggles with `POST /api/plugins/{id}/device-action` |

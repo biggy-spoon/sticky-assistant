@@ -111,6 +111,8 @@
       padding: 0 12px; overflow-x: auto; scrollbar-width: none;
     }
     .tabbar::-webkit-scrollbar { display: none; }
+    .choice-row { display: flex; gap: 8px; align-items: center; }
+    .choice-row select { flex: 1; }
     .tab-btn {
       padding: 10px 14px; font-size: 13.5px; font-weight: 500; color: var(--muted);
       background: none; border: none; border-bottom: 2px solid transparent; cursor: pointer;
@@ -305,6 +307,49 @@
 
   <main class="wrap">
   <div class="tab-panel" id="tab-overview" role="tabpanel">
+    <section class="card">
+      <div class="card-head">
+        <span class="icon-box"><svg class="icon" viewBox="0 0 24 24"><rect x="5" y="3" width="14" height="18" rx="2"/><path d="M9 7h6M9 11h6"/></svg></span>
+        <div>
+          <h2>Device</h2>
+          <p class="card-sub">Stored on the Sticky itself. Changing WiFi or the backend restarts it.</p>
+        </div>
+      </div>
+      <div class="field-group">
+        <label for="device-backend">Backend address</label>
+        <input id="device-backend" type="text" placeholder="http://192.168.1.50:8000">
+        <p class="hint">The server that runs speech recognition, the AI and the plugins.</p>
+      </div>
+      <div class="field-group">
+        <label for="device-sleep">Sleep after</label>
+        <select id="device-sleep">
+          <option value="2">2 minutes without use</option>
+          <option value="5">5 minutes without use</option>
+          <option value="10">10 minutes without use</option>
+          <option value="30">30 minutes without use</option>
+          <option value="0">Never</option>
+        </select>
+      </div>
+      <div class="field-group">
+        <label for="device-ssid">WiFi network</label>
+        <div class="choice-row">
+          <select id="device-ssid-select"><option value="">Scanning...</option></select>
+          <button type="button" class="btn secondary small" onclick="scanWifi()">Scan again</button>
+        </div>
+        <input id="device-ssid" type="text" placeholder="Network name" style="display:none">
+      </div>
+      <div class="field-group">
+        <label for="device-password">WiFi password</label>
+        <input id="device-password" type="password" placeholder="Leave blank to keep the saved one">
+      </div>
+      <div class="card-actions">
+        <button type="button" class="btn" onclick="saveDeviceSettings()">Save</button>
+        <span class="save-msg" id="device-save-msg">
+          <svg class="icon" viewBox="0 0 24 24"><path d="M5 13l4 4L19 7"/></svg>Saved
+        </span>
+      </div>
+    </section>
+
     <section class="card" aria-labelledby="status-heading">
       <div class="card-head">
         <span class="icon-box"><svg class="icon" viewBox="0 0 24 24"><path d="M3 12h3l2.5-7 4 14 2.5-7H21"/></svg></span>
@@ -344,12 +389,13 @@
       </div>
       <div class="field-group">
         <label for="ai-model">Model</label>
-        <input id="ai-model" type="text" list="ai-models">
-        <datalist id="ai-models"></datalist>
+        <select id="ai-model-select"><option value="">Loading models...</option></select>
+        <input id="ai-model" type="text" placeholder="Model id" style="display:none">
       </div>
       <div class="field-group">
         <label for="timezone">Timezone</label>
-        <input id="timezone" type="text" placeholder="e.g. America/New_York">
+        <select id="timezone-select"></select>
+        <input id="timezone" type="hidden">
         <p class="hint">For the device's clock, its calendar and the todo list's reset at midnight. Blank uses this server's timezone.</p>
       </div>
       <div class="field-group">
@@ -428,6 +474,44 @@
   </footer>
 
   <script>
+    // This page is served by the device. Its own settings are under /device;
+    // everything else comes from the backend, whose address the device knows.
+    let API = '';
+    let deviceConfig = {};
+
+    async function loadDeviceSettings() {
+      deviceConfig = await fetch('/device/config').then(r => r.json());
+      API = deviceConfig.backend || '';
+      document.getElementById('device-backend').value = deviceConfig.backend || '';
+      document.getElementById('device-sleep').value = String(deviceConfig.sleep_minutes ?? 5);
+      document.getElementById('device-ssid').value = deviceConfig.wifi_ssid || '';
+      scanWifi();
+    }
+
+    async function saveDeviceSettings() {
+      const body = {
+        backend: document.getElementById('device-backend').value.trim(),
+        sleep_minutes: Number(document.getElementById('device-sleep').value),
+        wifi_ssid: document.getElementById('device-ssid').value.trim(),
+      };
+      const password = document.getElementById('device-password').value;
+      if (password) body.wifi_password = password;
+      const result = await fetch('/device/config', {
+        method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(body),
+      }).then(r => r.json()).catch(() => ({}));
+      if (result.error) { alert(result.error); return; }
+      flashSaved('device-save-msg');
+      if (result.restarting) {
+        alert('Saved. The device is restarting to use the new settings; reload this page in a few seconds.');
+      }
+    }
+
+    // The device sleeps when nobody touches it. While this page is open and
+    // visible, it counts as being used.
+    setInterval(() => {
+      if (document.visibilityState === 'visible') fetch('/device/ping').catch(() => {});
+    }, 60000);
+
     const TABS = ['overview', 'plugins', 'hub', 'history'];
 
     function showTab(tab) {
@@ -482,7 +566,7 @@
     }
 
     async function loadStatus() {
-      const status = await fetch('/api/status').then(r => r.json());
+      const status = await fetch(API + '/api/status').then(r => r.json());
       const grid = document.getElementById('status-grid');
       const seen = status.last_seen ? new Date(status.last_seen).toLocaleString() : 'never';
       grid.innerHTML = [
@@ -501,7 +585,7 @@
     }
 
     async function loadHistory() {
-      const history = await fetch('/api/history').then(r => r.json());
+      const history = await fetch(API + '/api/history').then(r => r.json());
       const el = document.getElementById('history');
       if (!history.length) {
         el.innerHTML = '<div class="empty">No conversations yet.</div>';
@@ -521,21 +605,53 @@
 
     let coreConfig = null;
 
+    // A dropdown backed by a text field: the field holds the value that gets
+    // saved, and shows itself only for "Other...".
+    function fillChoice(selectId, inputId, options, current, otherLabel) {
+      const select = document.getElementById(selectId);
+      const input = document.getElementById(inputId);
+      const values = options.map(o => typeof o === 'string' ? {value: o, label: o} : o);
+      if (current && !values.some(o => o.value === current)) values.unshift({value: current, label: current});
+      select.innerHTML = values.map(o => `<option value="${escapeHtml(o.value)}">${escapeHtml(o.label)}</option>`).join('')
+        + (otherLabel ? `<option value="__other__">${escapeHtml(otherLabel)}</option>` : '');
+      select.value = current || (values.length ? values[0].value : '__other__');
+      select.onchange = () => {
+        const other = select.value === '__other__';
+        if (input.type !== 'hidden') input.style.display = other ? '' : 'none';
+        input.value = other ? '' : select.value;
+        if (other) input.focus();
+      };
+      select.onchange();
+    }
+
+    async function scanWifi() {
+      const select = document.getElementById('device-ssid-select');
+      select.innerHTML = '<option value="">Scanning...</option>';
+      const result = await fetch('/device/wifi').then(r => r.json()).catch(() => ({networks: []}));
+      const networks = (result.networks || []).map(n => ({
+        value: n.ssid, label: `${n.ssid}${n.secure ? '' : ' (open)'}${n.ssid === deviceConfig.wifi_ssid ? ' (connected)' : ''}`,
+      }));
+      fillChoice('device-ssid-select', 'device-ssid', networks, deviceConfig.wifi_ssid || '', 'Other (hidden network)...');
+    }
+
+    function timezoneOptions() {
+      const zones = (Intl.supportedValuesOf ? Intl.supportedValuesOf('timeZone') : []);
+      return [{value: '', label: "This server's timezone"}, ...zones.map(z => ({value: z, label: z.replace(/_/g, ' ')}))];
+    }
+
     async function showProvider() {
       const provider = document.getElementById('ai-provider').value;
       const saved = coreConfig.ai[provider] || {};
-      document.getElementById('ai-model').value = saved.model || '';
       document.getElementById('ai-key').placeholder = saved.api_key
         ? `Saved: ${saved.api_key}` : 'Not set yet';
       document.getElementById('base-url-group').style.display = provider === 'openai' ? '' : 'none';
-      const list = document.getElementById('ai-models');
-      list.innerHTML = '';
-      const result = await fetch(`/api/ai/models?provider=${provider}`).then(r => r.json()).catch(() => ({}));
-      list.innerHTML = (result.models || []).map(m => `<option value="${escapeHtml(m)}">`).join('');
+      document.getElementById('ai-model-select').innerHTML = '<option value="">Loading models...</option>';
+      const result = await fetch(API + `/api/ai/models?provider=${provider}`).then(r => r.json()).catch(() => ({}));
+      fillChoice('ai-model-select', 'ai-model', result.models || [], saved.model || '', 'Other model id...');
     }
 
     async function loadCoreSettings() {
-      const config = await fetch('/api/settings').then(r => r.json());
+      const config = await fetch(API + '/api/settings').then(r => r.json());
       coreConfig = config;
       const select = document.getElementById('ai-provider');
       select.innerHTML = Object.entries(config.ai_providers)
@@ -543,7 +659,7 @@
       select.value = config.ai_provider;
       document.getElementById('openai-base-url').value = config.openai_base_url || '';
       showProvider();
-      document.getElementById('timezone').value = config.timezone || '';
+      fillChoice('timezone-select', 'timezone', timezoneOptions(), config.timezone || '', null);
       document.getElementById('units').value = config.units || 'imperial';
       document.getElementById('device-font').value = config.device_font || 'custom';
     }
@@ -559,7 +675,7 @@
       };
       const key = document.getElementById('ai-key').value;
       if (key) body.ai_api_key = key;
-      const response = await fetch('/api/settings', {
+      const response = await fetch(API + '/api/settings', {
         method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(body),
       });
       if (!response.ok) {
@@ -604,7 +720,7 @@
     }
 
     async function renderPlugins() {
-      const pluginList = await fetch('/api/plugins').then(r => r.json());
+      const pluginList = await fetch(API + '/api/plugins').then(r => r.json());
       const container = document.getElementById('plugins');
       container.innerHTML = pluginList.map(plugin => `
         <section class="card">
@@ -664,7 +780,7 @@
     }
 
     async function loadTodoList() {
-      const data = await fetch('/api/plugins/todo/view').then(r => r.json());
+      const data = await fetch(API + '/api/plugins/todo/view').then(r => r.json());
       const el = document.getElementById('todo-list');
       const open = data.open || [];
       const done = data.done || [];
@@ -682,7 +798,7 @@
 
     async function loadPluginHub() {
       const el = document.getElementById('plugin-hub-list');
-      const data = await fetch('/api/plugin-hub').then(r => r.json());
+      const data = await fetch(API + '/api/plugin-hub').then(r => r.json());
       const hubPlugins = data.plugins || [];
       if (data.error && !hubPlugins.length) {
         el.innerHTML = `<div class="empty">Couldn't reach the plugin hub: ${escapeHtml(data.error)}</div>`;
@@ -701,7 +817,13 @@
               : '<span class="pill neutral">Available</span>'}
           </div>
           <p class="hub-item-desc">${escapeHtml(p.description || '')}${p.author ? ` &middot; by ${escapeHtml(p.author)}` : ''}</p>
-          ${!p.installed && p.repo_url ? `
+          ${!p.installed && p.installable ? `
+            <div class="hub-install-row">
+              <button type="button" class="btn small" onclick="installHubPlugin('${escapeHtml(p.id)}', this)">Install</button>
+              <span class="hint">Reviewed by the hub. Runs on your backend.</span>
+            </div>
+          ` : ''}
+          ${!p.installed && !p.installable && p.repo_url ? `
             <div class="hub-install-row">
               <code class="hub-cmd" id="hub-cmd-${escapeHtml(p.id)}">git clone ${escapeHtml(p.repo_url)} backend/plugins/${escapeHtml(p.id)}</code>
               <button type="button" class="btn secondary small" onclick="copyHubCommand('${escapeHtml(p.id)}', this)">Copy</button>
@@ -715,6 +837,17 @@
           ` : ''}
         </div>
       `).join('');
+    }
+
+    async function installHubPlugin(id, btn) {
+      if (!confirm('Install this plugin? It runs as code on your backend.')) return;
+      btn.disabled = true;
+      btn.textContent = 'Installing...';
+      const response = await fetch(API + `/api/plugin-hub/${id}/install`, {method: 'POST'});
+      const result = await response.json().catch(() => ({}));
+      if (!response.ok) alert(result.detail || 'Could not install the plugin');
+      loadPluginHub();
+      renderPlugins();
     }
 
     function copyHubCommand(id, btn) {
@@ -732,7 +865,7 @@
       const inputs = document.querySelectorAll(`[id^="field-${pluginId}-"]`);
       const body = {};
       inputs.forEach(el => { if (el.dataset.key) body[el.dataset.key] = el.value; });
-      await fetch(`/api/plugins/${pluginId}/settings`, {
+      await fetch(API + `/api/plugins/${pluginId}/settings`, {
         method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(body),
       });
       flashSaved(`save-msg-${pluginId}`);
@@ -740,7 +873,7 @@
     }
 
     async function loadCalendarEvents() {
-      const data = await fetch('/api/plugins/calendar/view').then(r => r.json());
+      const data = await fetch(API + '/api/plugins/calendar/view').then(r => r.json());
       const el = document.getElementById('calendar-events');
       const events = data.events || [];
       if (data.error) {
@@ -779,12 +912,18 @@
       return div.innerHTML;
     }
 
+    // The backend's address comes from the device, so it loads first.
     initTab();
-    loadStatus();
-    loadHistory();
-    loadCoreSettings();
-    renderPlugins();
-    loadPluginHub();
+    loadDeviceSettings().then(() => {
+      loadStatus();
+      loadHistory();
+      loadCoreSettings();
+      renderPlugins();
+      loadPluginHub();
+    }).catch(() => {
+      document.getElementById('status-grid').innerHTML =
+        '<div class="empty">Couldn\'t reach the device. Is it awake and on this WiFi?</div>';
+    });
   </script>
 </body>
 </html>

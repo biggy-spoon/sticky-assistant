@@ -12,6 +12,7 @@ constexpr const char* kNamespace = "sticky";
 constexpr const char* kKeySsid = "wifi_ssid";
 constexpr const char* kKeyPassword = "wifi_pass";
 constexpr const char* kKeyBackendUrl = "backend_url";
+constexpr const char* kKeySleepMinutes = "sleep_min";
 
 std::string ReadString(nvs_handle_t handle, const char* key) {
     size_t size = 0;
@@ -47,6 +48,10 @@ Settings Get() {
     settings.wifi_ssid = ReadString(handle, kKeySsid);
     settings.wifi_password = ReadString(handle, kKeyPassword);
     settings.backend_url = ReadString(handle, kKeyBackendUrl);
+    uint8_t sleep_minutes = 0;
+    if (nvs_get_u8(handle, kKeySleepMinutes, &sleep_minutes) == ESP_OK) {
+        settings.sleep_minutes = sleep_minutes;
+    }
     nvs_close(handle);
     return settings;
 }
@@ -65,6 +70,12 @@ esp_err_t Save(const Settings& settings) {
     }
     if (err == ESP_OK) {
         err = nvs_set_str(handle, kKeyBackendUrl, settings.backend_url.c_str());
+    }
+    if (err == ESP_OK) {
+        err = nvs_set_u8(handle, kKeySleepMinutes,
+                         static_cast<uint8_t>(settings.sleep_minutes < 0 ? 0
+                                              : settings.sleep_minutes > 240 ? 240
+                                                                             : settings.sleep_minutes));
     }
     if (err == ESP_OK) {
         err = nvs_commit(handle);

@@ -11,6 +11,7 @@
 #include "esp_attr.h"
 #include "esp_http_client.h"
 #include "esp_log.h"
+#include "esp_spiffs.h"
 #include "esp_timer.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/queue.h"
@@ -90,6 +91,7 @@ struct Clock {
     int64_t now = 0;
     int utc_offset = 0;
     bool custom_font = true;  // the Settings page's font choice
+    std::string home_page = "home";
     std::string assistant_name;
     Weather weather;
 };
@@ -141,6 +143,13 @@ bool s_force_render = false;  // the next fetch has to draw, whatever it returns
 int s_posts_pending = 0;
 int64_t s_last_fetch_us = 0;  // 0 = the cache needs refreshing at the next chance
 Weather s_weather;
+// The page the device starts on and goes back to (Settings > Home page). The
+// widgets (page 0) stay in the rotation whatever it is.
+std::string s_home_page_id = "home";
+bool s_open_home_after_fetch = false;  // a power-on with no cache to start from
+// A power-on drawn from the cache, still on the home page it named: if the
+// backend names a different one, go there (unless the user has moved on).
+int s_cached_home_page = -1;
 
 void Lock() { xSemaphoreTake(s_state_mutex, portMAX_DELAY); }
 void Unlock() { xSemaphoreGive(s_state_mutex); }
@@ -164,18 +173,21 @@ std::string PageId() {
     return view != nullptr ? view->plugin_id : "home";
 }
 
-// Sets the page from an id saved by PageId(). Unknown ids leave it at home.
-void SetPageById(const std::string& id) {
-    s_page = kHomePage;
+// The page for an id saved by PageId(), or the widgets if there's none.
+int PageForId(const std::string& id) {
     if (id == "claude") {
-        s_page = kClaudePage;
+        return kClaudePage;
     }
     for (size_t i = 0; i < s_views.size(); ++i) {
         if (s_views[i].plugin_id == id) {
-            s_page = kFirstViewPage + static_cast<int>(i);
+            return kFirstViewPage + static_cast<int>(i);
         }
     }
+    return kHomePage;
 }
+
+// Sets the page from an id saved by PageId(). Unknown ids leave it at home.
+void SetPageById(const std::string& id) { s_page = PageForId(id); }
 
 std::string BaseUrl() {
     // settings_service's backend_url is the full /converse endpoint
@@ -213,9 +225,12 @@ int64_t JsonInt(const cJSON* object, const char* key) {
     return cJSON_IsNumber(field) ? static_cast<int64_t>(field->valuedouble) : 0;
 }
 
-// Fetches and parses GET /api/device/views. Only ever called from
-// DeviceNavTask -- this is a blocking network call.
-bool FetchViews(std::vector<View>* out_views, Clock* out_clock) {
+bool ParseViews(const std::string& body, std::vector<View>* out_views, Clock* out_clock);
+
+// Fetches and parses GET /api/device/views, and hands back the raw response
+// for the flash cache. Only ever called from DeviceNavTask -- this is a
+// blocking network call.
+bool FetchViews(std::vector<View>* out_views, Clock* out_clock, std::string* raw) {
     // The backend only offers a font choice to firmware that has one.
     std::string url = BaseUrl() + "/api/device/views";
     if (ui::HasCustomFont()) {
@@ -250,10 +265,18 @@ bool FetchViews(std::vector<View>* out_views, Clock* out_clock) {
         ESP_LOGW(kTag, "GET /api/device/views failed: err=%s http=%d", esp_err_to_name(err), status);
         return false;
     }
+    if (!ParseViews(response_buffer.body, out_views, out_clock)) {
+        return false;
+    }
+    *raw = std::move(response_buffer.body);
+    return true;
+}
 
-    cJSON* root = cJSON_ParseWithLength(response_buffer.body.c_str(), response_buffer.body.size());
+// The response to GET /api/device/views, from the network or the flash cache.
+bool ParseViews(const std::string& body, std::vector<View>* out_views, Clock* out_clock) {
+    cJSON* root = cJSON_ParseWithLength(body.c_str(), body.size());
     if (root == nullptr) {
-        ESP_LOGW(kTag, "invalid JSON from /api/device/views");
+        ESP_LOGW(kTag, "invalid JSON in the device views");
         return false;
     }
 
@@ -327,6 +350,10 @@ bool FetchViews(std::vector<View>* out_views, Clock* out_clock) {
     const cJSON* device = cJSON_GetObjectItemCaseSensitive(root, "device");
     if (cJSON_IsObject(device)) {
         out_clock->custom_font = JsonString(device, "font") != "default";
+        const std::string home = JsonString(device, "home_page");
+        if (!home.empty()) {
+            out_clock->home_page = home;
+        }
     }
     cJSON_Delete(root);
 
@@ -686,11 +713,62 @@ bool ApplyViewsLocked(std::vector<View> views) {
     return changed;
 }
 
+// The last views the backend sent, in flash, so a wake or a restart can draw
+// the real pages at once instead of an empty home while the network catches up.
+constexpr const char* kCachePath = "/cache/views.json";
+bool s_cache_mounted = false;
+bool s_cache_saved = false;  // this boot's views are in flash
+
+void MountCache() {
+    esp_vfs_spiffs_conf_t conf = {};
+    conf.base_path = "/cache";
+    conf.partition_label = "storage";
+    conf.max_files = 2;
+    conf.format_if_mount_failed = true;  // first boot after the partition was added
+    const esp_err_t err = esp_vfs_spiffs_register(&conf);
+    s_cache_mounted = err == ESP_OK;
+    if (!s_cache_mounted) {
+        ESP_LOGW(kTag, "no views cache: %s", esp_err_to_name(err));
+    }
+}
+
+void SaveCache(const std::string& body) {
+    if (!s_cache_mounted || body.empty()) {
+        return;
+    }
+    FILE* file = fopen(kCachePath, "wb");
+    if (file == nullptr) {
+        return;
+    }
+    fwrite(body.data(), 1, body.size(), file);
+    fclose(file);
+}
+
+std::string LoadCache() {
+    std::string body;
+    FILE* file = s_cache_mounted ? fopen(kCachePath, "rb") : nullptr;
+    if (file == nullptr) {
+        return body;
+    }
+    char chunk[512];
+    size_t got = 0;
+    while ((got = fread(chunk, 1, sizeof(chunk), file)) > 0) {
+        body.append(chunk, got);
+    }
+    fclose(file);
+    return body;
+}
+
 void HandleRefresh() {
     std::vector<View> views;
     Clock clock;
-    const bool ok = FetchViews(&views, &clock);
+    std::string raw;
+    const bool ok = FetchViews(&views, &clock, &raw);
+    // The first time the clock is known (after a power-on), or a timezone
+    // change, every time on screen needs redrawing.
+    bool clock_changed = false;
     if (clock.known) {
+        clock_changed = !ui::TimeKnown();
         ui::SetClock(clock.now, clock.utc_offset);
     }
     const bool font_changed = ok && ui::UseCustomFont(clock.custom_font);
@@ -705,7 +783,7 @@ void HandleRefresh() {
     s_refresh_in_flight = false;
     // Forced: something (boot, or Loading after a page change) waits on this
     // fetch and has to be replaced. Otherwise an error message stays up.
-    const bool forced = s_force_render || font_changed ||
+    const bool forced = s_force_render || font_changed || clock_changed ||
                         (name_changed && (s_page == kHomePage || s_page == kClaudePage));
     bool render = forced;
     s_force_render = false;
@@ -714,8 +792,11 @@ void HandleRefresh() {
 
     // A toggle that hasn't reached the backend yet would be undone by this
     // result, which predates it. The next page change refreshes again.
+    bool save = false;
     if (ok && s_posts_pending == 0) {
         s_last_fetch_us = esp_timer_get_time();
+        // Only rewritten when the pages or the home page change, to spare the flash.
+        save = !s_cache_saved || !(views == s_views) || clock.home_page != s_home_page_id;
         if (ApplyViewsLocked(std::move(views))) {
             render = true;
         }
@@ -725,6 +806,18 @@ void HandleRefresh() {
         }
     }
     bool keep_scroll = true;
+    if (ok) {
+        if (s_cached_home_page >= 0 && clock.home_page != s_home_page_id &&
+            s_page == s_cached_home_page) {
+            s_resume_page = clock.home_page;  // the cache was older than the setting
+        }
+        s_cached_home_page = -1;
+        s_home_page_id = clock.home_page;
+    }
+    if (ok && s_open_home_after_fetch) {
+        s_resume_page = s_home_page_id;  // a power-on starts on the home page
+        s_open_home_after_fetch = false;
+    }
     if (!s_resume_page.empty()) {
         SetPageById(s_resume_page);
         s_resume_page.clear();
@@ -740,6 +833,10 @@ void HandleRefresh() {
         RenderCurrentLocked(keep_scroll);
     }
     Unlock();
+    if (save) {
+        SaveCache(raw);
+        s_cache_saved = true;
+    }
 }
 
 void HandleRedraw();
@@ -808,6 +905,7 @@ void SaveConversation() {
 }  // namespace
 
 esp_err_t Init() {
+    MountCache();
     s_state_mutex = xSemaphoreCreateMutex();
     if (s_state_mutex == nullptr) {
         return ESP_ERR_NO_MEM;
@@ -829,9 +927,10 @@ esp_err_t Init() {
     return ESP_OK;
 }
 
-void Start(bool wifi_connected, bool woke_from_sleep) {
+bool s_started_from_cache = false;
+
+void ShowCached(bool woke_from_sleep) {
     Lock();
-    s_wifi_connected = wifi_connected;
     if (woke_from_sleep) {
         s_transcript = s_rtc_transcript;
         s_reply = s_rtc_reply;
@@ -839,7 +938,53 @@ void Start(bool wifi_connected, bool woke_from_sleep) {
     } else {
         s_rtc_page[0] = s_rtc_transcript[0] = s_rtc_reply[0] = '\0';
     }
-    if (wifi_connected) {
+    std::vector<View> cached;
+    Clock cached_clock;
+    const std::string body = LoadCache();
+    if (!body.empty() && ParseViews(body, &cached, &cached_clock)) {
+        s_views = std::move(cached);
+        s_has_fetched = true;
+        // The clock keeps running through deep sleep; after a power cut it's
+        // unknown until the backend answers.
+        const int64_t now = static_cast<int64_t>(time(nullptr));
+        if (cached_clock.known) {
+            ui::SetUtcOffset(cached_clock.utc_offset);
+            if (now > cached_clock.now - 60) {
+                ui::SetClock(now, cached_clock.utc_offset);
+            }
+        }
+        if (!cached_clock.assistant_name.empty()) {
+            ui::SetAssistantName(cached_clock.assistant_name);
+        }
+        ui::UseCustomFont(cached_clock.custom_font);
+        s_weather = cached_clock.weather;
+        s_home_page_id = cached_clock.home_page;
+        if (!woke_from_sleep) {
+            s_resume_page = s_home_page_id;  // a power-on starts on the home page
+            s_cached_home_page = PageForId(s_home_page_id);
+        }
+        if (!s_resume_page.empty()) {
+            SetPageById(s_resume_page);
+            s_resume_page.clear();
+        }
+        ESP_LOGI(kTag, "drawing %u cached pages while WiFi connects",
+                 static_cast<unsigned>(s_views.size()));
+        RenderCurrentLocked(false);
+        s_started_from_cache = true;
+    }
+    Unlock();
+}
+
+void Start(bool wifi_connected, bool woke_from_sleep) {
+    (void)woke_from_sleep;  // ShowCached has handled it
+    Lock();
+    s_wifi_connected = wifi_connected;
+    if (s_started_from_cache) {
+        if (wifi_connected) {
+            EnqueueRefreshLocked();  // redraws only if something changed
+        }
+    } else if (wifi_connected) {
+        s_open_home_after_fetch = s_resume_page.empty();
         s_force_render = true;
         EnqueueRefreshLocked();
     } else {
@@ -947,13 +1092,17 @@ void OnTap(int x, int y) {
     }
     const ui::Hit hit = ui::HitTest(x, y);
     switch (hit.kind) {
-        case ui::HitKind::kStatusBar:
-            if (s_page != kHomePage || s_transient_shown) {
-                s_page = kHomePage;
+        case ui::HitKind::kStatusBar: {
+            // Home, and from home on to the widgets if home is another page.
+            const int home = PageForId(s_home_page_id);
+            const int target = s_page != home || s_transient_shown ? home : kHomePage;
+            if (target != s_page || s_transient_shown) {
+                s_page = target;
                 CloseOverlaysLocked();
                 RenderCurrentLocked(false);
             }
             break;
+        }
         case ui::HitKind::kTile:
             if (hit.index >= 0 && hit.index + 1 < TotalPages()) {
                 s_page = hit.index + 1;  // tile 0 is Claude, page 1
@@ -1038,11 +1187,11 @@ bool OnBack() {
     } else if (s_detail_row >= 0) {
         s_detail_row = -1;
         RenderCurrentLocked(true);
-    } else if (s_page != kHomePage || s_transient_shown) {
-        s_page = kHomePage;
+    } else if (s_page != PageForId(s_home_page_id) || s_transient_shown) {
+        s_page = PageForId(s_home_page_id);
         RenderCurrentLocked(false);
     } else {
-        moved = false;
+        moved = false;  // already home: the caller puts the device to sleep
     }
     Unlock();
     return moved;

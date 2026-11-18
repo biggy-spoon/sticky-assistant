@@ -169,17 +169,29 @@ repository is MIT.
   [`sticky-assistant-plugin-hub`](https://github.com/biggy-spoon/sticky-assistant-plugin-hub)
   repo, a community-maintained list of third-party plugins (metadata
   only: name, description, repo URL). The dashboard shows it alongside
-  which ones are already installed. This never fetches or executes a
-  plugin's actual code — installing one is still the manual copy-into-
-  `plugins/`-and-restart step above; the hub only solves discovery.
-- `dashboard.html` + the `/api/*` routes in `app.py` — a single
-  dependency-free HTML/JS page served at `/dashboard` (tabbed: Overview,
-  Plugins, Plugin hub, History). Settings forms are built client-side
-  from each plugin's schema; a plugin-specific data view (calendar's
-  "Upcoming events", todo's open/done lists) is the one place the
-  dashboard still has to know a plugin by name rather than purely by
-  schema. No authentication — same trust model as the device's own setup
-  portal, meant for the home LAN only.
+  which ones are already installed. Entries the hub marks `"reviewed": true`,
+  with a `download_url` to a single `.py` file on raw.githubusercontent.com,
+  can be installed from the settings page or the device:
+  `plugin_hub.install()` downloads, checks and loads it
+  (`plugins.load_module()`) without a restart. Everything else is installed
+  by hand.
+- `device_views.py` — each plugin's device screen, built in the background
+  every 90 seconds and served from memory, so `GET /api/device/views` answers
+  in well under a second. A copy older than two minutes is still served while
+  a new one is built; a tap, a settings change or a conversation rebuilds what
+  it touched. The device also keeps the last response in its `storage` flash
+  partition (SPIFFS) and draws from it at boot, before WiFi connects.
+- The settings page: a single dependency-free HTML/JS page, embedded in the
+  firmware (`firmware/components/settings_web/settings.html`) and served by
+  the device on port 80 while it's awake. Its own settings (backend address,
+  WiFi, sleep timeout) are under `/device/*` on the device; everything else
+  comes from the backend's `/api/*` routes, called directly from the browser,
+  so the backend allows cross-origin requests from home-network addresses.
+  Settings forms are built client-side from each plugin's schema; a
+  plugin-specific data view (calendar's "Upcoming events", todo's open/done
+  lists) is the one place the page still has to know a plugin by name. No
+  authentication — same trust model as the device's own setup portal, meant
+  for the home LAN only.
 - `Plugin.device_view()`/`device_action()` + `GET /api/device/views` +
   `POST /api/plugins/{id}/device-action` — the on-device counterpart to
   `dashboard_view()`: a plugin's own screen for the ePaper display,

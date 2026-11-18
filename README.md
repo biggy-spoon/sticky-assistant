@@ -41,7 +41,7 @@ calendar and it actually will.
   Web search works with Claude only.
 - **Settings on the device**: AI provider and model, units, timezone, weather
   location and font, each on its own screen: a list to pick from, or an
-  on-screen keyboard for the location. Also on the dashboard, and changeable by
+  on-screen keyboard for the location. Also on the settings page, and changeable by
   voice ("switch to metric").
 - **A calendar Claude can edit**: "move my dentist appointment to Friday at 3"
   moves it; events can also be renamed or deleted.
@@ -50,11 +50,12 @@ calendar and it actually will.
 - **No-recompile setup**: first boot opens a WiFi access point with a
   browser-based setup page for WiFi credentials and your backend's
   address. Settings are saved to the device's flash.
-- **A web dashboard** on the backend: conversation history, device
-  status, editable core settings (API key, Claude model), and every
-  plugin's own settings and data view (calendar's upcoming events, the
-  todo list's open/done items) — no `.env` editing or restart needed for
-  those.
+- **A settings page on the device itself**: open the Sticky's address in a
+  browser on the same WiFi (its Settings page shows it) for conversation
+  history, status, the AI provider and keys, every plugin's settings, the
+  plugin hub, and the device's own WiFi, backend address and sleep timeout. The
+  device stays awake while the page is open. No `.env` editing or restart
+  needed.
 - **A plugin system** for giving Claude new capabilities, shipping with
   two: calendar access (CalDAV or Google Calendar — "add a dentist
   appointment at 3pm on the 24th" actually lands on your calendar) and a
@@ -105,8 +106,8 @@ pip install -r requirements.txt
 uvicorn app:app --host 0.0.0.0 --port 8000
 ```
 
-Open `http://<that-machine>:8000/dashboard` to connect a calendar and
-check status.
+Once the device is set up (below), open its address in a browser (shown on its
+Settings page) to connect a calendar and check status.
 
 **2. Firmware** (requires [ESP-IDF](https://docs.espressif.com/projects/esp-idf/en/stable/esp32s3/get-started/index.html) v5.3.x):
 

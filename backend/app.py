@@ -1,11 +1,13 @@
-"""Voice assistant proxy for the reTerminal Sticky, plus a small dashboard.
+"""Voice assistant proxy for the reTerminal Sticky, plus the API the device's
+settings page uses.
 
 Receives a WAV recording from the device, transcribes it locally with
 faster-whisper, sends the transcript to the configured AI model (see
 ai_providers.py; Claude by default), with whatever tools the
 configured plugins contribute -- see plugins/ -- so it can actually act,
 not just talk about acting), and returns the transcript + reply as JSON
-for the device to render. The dashboard (see dashboard.html) exposes
+for the device to render. The settings page (served by the device; see
+firmware/components/settings_web) reads
 conversation history, settings, device status, and each plugin's own
 view over a small JSON API.
 """
@@ -20,10 +22,12 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 from dotenv import load_dotenv
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.concurrency import run_in_threadpool
-from fastapi.responses import FileResponse, JSONResponse
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse, RedirectResponse
 from faster_whisper import WhisperModel
 
 import ai_providers
+import device_views
 import plugin_hub
 import plugins
 import settings
@@ -79,16 +83,28 @@ def _remember(question: str, answer: str) -> None:
 app = FastAPI(title="sticky-assistant backend")
 whisper_model: WhisperModel | None = None
 
-DASHBOARD_PATH = os.path.join(os.path.dirname(__file__), "dashboard.html")
+
+# The settings page is served by the device itself and calls this API from the
+# browser, so cross-origin requests are allowed -- from home-network addresses
+# only, the same trust model the backend has always had (no login, LAN only).
+app.add_middleware(
+    CORSMiddleware,
+    allow_origin_regex=(r"^https?://(localhost|127\.0\.0\.1|10(\.\d{1,3}){3}|192\.168(\.\d{1,3}){2}"
+                        r"|172\.(1[6-9]|2\d|3[01])(\.\d{1,3}){2})(:\d+)?$"),
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 for _plugin in plugins.all_plugins():
     _plugin.register_routes(app)
+plugin_hub.route_registrar = lambda plugin: plugin.register_routes(app)
 
 
 @app.on_event("startup")
 def load_models() -> None:
     global whisper_model
     storage.init_db()
+    device_views.start()
     log.info("Loading faster-whisper model=%s device=%s compute_type=%s",
               WHISPER_MODEL_SIZE, WHISPER_DEVICE, WHISPER_COMPUTE_TYPE)
     whisper_model = WhisperModel(WHISPER_MODEL_SIZE, device=WHISPER_DEVICE,
@@ -144,6 +160,7 @@ async def converse(request: Request) -> JSONResponse:
     log.info("transcript=%r reply=%r", transcript, reply)
     storage.log_conversation(transcript, reply, success=True)
     _remember(transcript, reply)
+    device_views.invalidate()  # the model may have changed a calendar, todos or settings
     return JSONResponse({"transcript": transcript, "reply": reply})
 
 
@@ -191,8 +208,13 @@ def _reply_to(transcript: str) -> str:
 # --- Dashboard ---------------------------------------------------------
 
 @app.get("/dashboard")
-def dashboard() -> FileResponse:
-    return FileResponse(DASHBOARD_PATH)
+def dashboard():
+    """The dashboard moved onto the device: send the browser there."""
+    last_ip = storage.get_device_status().get("last_ip")
+    if last_ip:
+        return RedirectResponse(f"http://{last_ip}/")
+    return JSONResponse({"detail": "The settings page is on the device: open its address "
+                                   "(shown on its Settings page) in a browser."}, status_code=404)
 
 
 @app.get("/api/history")
@@ -309,6 +331,7 @@ async def api_set_plugin_settings(plugin_id: str, request: Request) -> dict:
         # previously-saved secret with an empty string.
         if key in field_keys and value:
             settings.set(key, value)
+    device_views.invalidate()  # a setting can change any screen (e.g. the weather location)
     return {"success": True}
 
 
@@ -324,9 +347,20 @@ def api_plugin_view(plugin_id: str) -> dict:
 def api_plugin_hub() -> dict:
     entries, error = plugin_hub.get_index()
     installed_ids = {plugin.id for plugin in plugins.all_plugins()}
+    entries = [dict(entry) for entry in entries]  # the cache stays as fetched
     for entry in entries:
         entry["installed"] = entry.get("id") in installed_ids
+        entry["installable"] = plugin_hub.installable(entry)
     return {"plugins": entries, "error": error}
+
+
+@app.post("/api/plugin-hub/{plugin_id}/install")
+def api_plugin_hub_install(plugin_id: str) -> dict:
+    try:
+        name = plugin_hub.install(plugin_id, lambda plugin: plugin.register_routes(app))
+    except plugin_hub.InstallError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return {"success": True, "name": name}
 
 
 # --- Device screens (Up/Down button navigation on the ePaper panel) ----
@@ -340,35 +374,19 @@ def api_device_views(fonts: str = "", font_name: str = "") -> dict:
     from plugins import settings_plugin
     settings_plugin.device_has_custom_font = "custom" in fonts.split(",")
     settings_plugin.device_custom_font_name = font_name.strip()[:40]
-    views = []
-    # Settings goes last, after the plugins it configures.
-    ordered = sorted(plugins.all_plugins(), key=lambda plugin: plugin.id == "settings")
-    for plugin in ordered:
-        if not plugin.is_configured():
-            continue
-        view = plugin.device_view()
-        if view is None:
-            continue
-        views.append({
-            "plugin_id": plugin.id,
-            "view_type": view.view_type,
-            "data": view.data,
-            "title": view.title,
-            "body": view.body,
-            "items": [{"id": item.id, "text": item.text, "secondary": item.secondary,
-                       "detail": item.detail, "checked": item.checked,
-                       "start_ts": item.start_ts, "end_ts": item.end_ts, "all_day": item.all_day,
-                       "action": item.action, "options": item.options or [],
-                       "value": item.value}
-                      for item in (view.items or [])],
-        })
+    # Settings goes last, after the plugins it configures. Screens come ready
+    # made from device_views, so this answers at once.
+    ordered = sorted((p for p in plugins.all_plugins() if p.is_configured()),
+                     key=lambda plugin: plugin.id == "settings")
+    views = [{"plugin_id": plugin.id, **view}
+             for plugin, view in device_views.views(ordered) if view is not None]
     # The device has no clock of its own worth trusting, so it sets its time
     # from here, and shows it in the user's timezone.
     now = time.time()
     offset = datetime.fromtimestamp(now, settings.local_timezone()).utcoffset()
     result = {"views": views,
               "clock": {"now": int(now), "utc_offset": int(offset.total_seconds()) if offset else 0},
-              "device": {"font": settings.get_device_font()},
+              "device": {"font": settings.get_device_font(), "home_page": settings.get_home_page()},
               "assistant": {"name": ai_providers.assistant_name(),
                             "model": settings.get_ai_model(settings.get_ai_provider())}}
     weather = plugins.get("weather")
@@ -391,10 +409,12 @@ async def api_plugin_device_action(plugin_id: str, request: Request) -> dict:
         raise HTTPException(status_code=400, detail="item_id is required")
     if "value" in body:  # a pick from a list, or typed text
         plugin.device_input(str(item_id), str(body["value"]))
+        device_views.invalidate(plugin.id)
         return {"success": True}
     # Checkable rows send the state they should now have; tap rows send none.
     checked = body.get("checked")
     if checked is not None and not isinstance(checked, bool):
         raise HTTPException(status_code=400, detail="checked must be true, false or absent")
     plugin.device_action(str(item_id), checked)
+    device_views.invalidate(plugin.id)
     return {"success": True}

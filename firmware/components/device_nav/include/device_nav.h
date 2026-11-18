@@ -20,6 +20,11 @@ namespace device_nav {
 
 esp_err_t Init();
 
+// Called once at boot, before WiFi: draws the pages saved in flash from the last
+// time the backend answered, back on the page that was showing before sleep,
+// so there's something real on screen while the network comes up.
+void ShowCached(bool woke_from_sleep);
+
 // Called once after the first WiFi connect attempt. With WiFi it fetches the
 // views and then draws; without it, it draws home straight away. After a wake
 // from sleep it returns to the page that was showing.
@@ -47,8 +52,9 @@ void OnScroll(int direction);
 // what's on the glass may not match the state yet.
 void OnTap(int x, int y);
 
-// Back: details go back to their list, and any other page goes home. False if
-// already home with nothing to go back from.
+// Back: details go back to their list, and any other page goes to the home page
+// (Settings > Home page: the widgets, or e.g. the calendar). False if already
+// there with nothing to go back from.
 bool OnBack();
 
 // True when nothing is in progress that sleeping would cut short.
