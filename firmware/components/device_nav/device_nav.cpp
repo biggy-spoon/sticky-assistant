@@ -122,6 +122,11 @@ TimerHandle_t s_redraw_timer = nullptr;
 SemaphoreHandle_t s_state_mutex = nullptr;
 std::vector<View> s_views;
 bool s_has_fetched = false;  // distinguishes "fetched, turned out empty" from "never fetched"
+// The backend has never answered since power-on and there's no cache: home
+// says so, with what to check, and the fetch is retried every 30 seconds.
+bool s_backend_unreachable = false;
+esp_timer_handle_t s_retry_timer = nullptr;
+constexpr uint64_t kRetryUs = 30ULL * 1000 * 1000;
 int s_page = kHomePage;
 int s_detail_row = -1;  // row whose details are open, -1 = none
 // A picker or keyboard open over the current view, by the row's id, so a
@@ -514,9 +519,41 @@ bool ParseWeather(const std::string& data_json, ui::WeatherInfo* info) {
 
 // Draws the current page. Caller must hold the lock, as for every *Locked
 // function here.
+// Home before any pages have arrived: why, and what to do about it. Empty
+// otherwise. A new user sees this until their backend is running.
+std::string SetupProblemLocked() {
+    if (!s_views.empty()) {
+        return "";
+    }
+    const settings_service::Settings settings = settings_service::Get();
+    if (!s_wifi_connected) {
+        return "Couldn't join the WiFi network \"" + settings.wifi_ssid +
+               "\".\n\nCheck that it's in range and the password is right. To change "
+               "it, hold Up and Down together while the Sticky starts (or wakes) for two "
+               "seconds: it opens the setup network StickyAssistant-Setup again.";
+    }
+    if (s_backend_unreachable) {
+        return "Connected to WiFi, but nothing answers at\n" + settings.backend_url +
+               "\n\nSticky Assistant needs its backend, a small server on a computer at home "
+               "that does the speech recognition and talks to the AI. Start it (see "
+               "github.com/biggy-spoon/sticky-assistant), and check that the address is "
+               "right on this device's settings page. Trying again every 30 seconds.";
+    }
+    return "";
+}
+
 void RenderCurrentLocked(bool keep_scroll) {
     s_transient_shown = false;
     const ui::PagePos page = {s_page, TotalPages()};
+    if (s_page == kHomePage || s_views.empty()) {
+        const std::string problem = SetupProblemLocked();
+        if (!problem.empty() && s_page != kClaudePage) {
+            s_page = kHomePage;
+            ui::ShowDetail(s_wifi_connected ? "Can't reach the backend" : "No WiFi", problem,
+                           {kHomePage, TotalPages()}, false);
+            return;
+        }
+    }
     if (s_page == kHomePage) {
         ui::ShowHome(BuildHome(), page);
         return;
@@ -787,6 +824,15 @@ void HandleRefresh() {
                         (name_changed && (s_page == kHomePage || s_page == kClaudePage));
     bool render = forced;
     s_force_render = false;
+    const bool unreachable = !ok && !s_has_fetched && s_views.empty();
+    if (unreachable != s_backend_unreachable) {
+        s_backend_unreachable = unreachable;
+        render = true;
+    }
+    if (unreachable && s_retry_timer != nullptr) {
+        esp_timer_stop(s_retry_timer);  // fails harmlessly if it isn't running
+        esp_timer_start_once(s_retry_timer, kRetryUs);
+    }
     const int pending_nav = s_pending_nav;
     s_pending_nav = 0;
 
@@ -913,6 +959,16 @@ esp_err_t Init() {
     s_queue = xQueueCreate(kQueueLength, sizeof(Command));
     if (s_queue == nullptr) {
         return ESP_ERR_NO_MEM;
+    }
+    esp_timer_create_args_t retry = {};
+    retry.callback = [](void*) {
+        Lock();
+        EnqueueRefreshLocked();
+        Unlock();
+    };
+    retry.name = "views_retry";
+    if (esp_timer_create(&retry, &s_retry_timer) != ESP_OK) {
+        s_retry_timer = nullptr;  // no retries; a page change still fetches
     }
     if (xTaskCreate(DeviceNavTask, "device_nav", kTaskStackBytes, nullptr, 4, &s_task) != pdPASS) {
         s_task = nullptr;
