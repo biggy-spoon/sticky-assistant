@@ -1106,23 +1106,6 @@ void RenderHome(const HomeInfo& info, PagePos page) {
         lv_obj_t* title = Label(screen, g_fonts->bold_24, SanitizeText(what), LV_LABEL_LONG_DOT, kRightW);
         lv_obj_set_pos(title, kRightX, kBarH + 42);
     }
-    if (info.open_todos >= 0) {
-        char todos[40];
-        if (info.open_todos == 0) {
-            snprintf(todos, sizeof(todos), "Todo list all done");
-        } else {
-            snprintf(todos, sizeof(todos), "%d todo%s to do", info.open_todos,
-                     info.open_todos == 1 ? "" : "s");
-        }
-        lv_obj_t* label = Label(screen, g_fonts->sans_18, todos, LV_LABEL_LONG_DOT, kRightW);
-        lv_obj_set_pos(label, kRightX, kBarH + 80);
-    }
-    if (!info.wifi_connected) {
-        lv_obj_t* label = Label(screen, g_fonts->sans_18, "No WiFi: Claude and plugins can't load",
-                                LV_LABEL_LONG_DOT, kRightW);
-        lv_obj_set_pos(label, kRightX, kBarH + 80);
-    }
-
     if (info.has_weather) {
         lv_obj_t* corner = Plain(screen);
         lv_obj_set_pos(corner, kW - kWeatherW - kGutter / 2, kBarH + 10);
