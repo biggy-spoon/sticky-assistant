@@ -17,7 +17,7 @@ import requests
 import settings
 from .base import DeviceView, DeviceViewItem, Plugin, SettingField
 
-log = logging.getLogger("sticky-claude.plugins.weather")
+log = logging.getLogger("sticky-assistant.plugins.weather")
 
 _GEOCODE_URL = "https://geocoding-api.open-meteo.com/v1/search"
 _FORECAST_URL = "https://api.open-meteo.com/v1/forecast"
@@ -201,6 +201,74 @@ def _hourly_text(data: dict, day: dict, now: datetime) -> str:
     return "\n".join(lines)
 
 
+def _epoch(local: datetime, data: dict) -> int:
+    """Unix time of one of Open-Meteo's local wall-clock times."""
+    return int((local - datetime(1970, 1, 1)).total_seconds()) - int(data.get("utc_offset_seconds", 0))
+
+
+def _is_day(moment: datetime, day: Optional[dict]) -> bool:
+    return day is None or day["sunrise"] <= moment < day["sunset"]
+
+
+def _device_data(data: dict) -> dict:
+    """What the device's weather screen draws: now, the next hours, and each
+    day with its hours every three, all with WMO codes for the icons."""
+    days = _days(data)
+    by_date = {day["date"]: day for day in days}
+    current = data.get("current") or {}
+    now_local = datetime.fromisoformat(current["time"]) if "time" in current else datetime.now()
+    hourly = data["hourly"]
+    upcoming = []
+    for i, stamp in enumerate(hourly["time"]):
+        moment = datetime.fromisoformat(stamp)
+        if moment < now_local.replace(minute=0, second=0, microsecond=0):
+            continue
+        upcoming.append({"ts": _epoch(moment, data), "temp": round(hourly["temperature_2m"][i]),
+                         "code": int(hourly["weather_code"][i]),
+                         "day": _is_day(moment, by_date.get(moment.date())),
+                         "rain": hourly["precipitation_probability"][i] or 0})
+        if len(upcoming) == 12:
+            break
+    out_days = []
+    for day in days:
+        hours = [h for h in _hours(data, day["date"]) if h["time"].hour % 3 == 0]
+        out_days.append({
+            "ts": _epoch(datetime(day["date"].year, day["date"].month, day["date"].day), data),
+            "code": _code_for_day(data, day["date"]),
+            "low": day["low"], "high": day["high"], "rain": day["rain"] or 0,
+            "condition": day["condition"],
+            "sunrise": _epoch(day["sunrise"], data), "sunset": _epoch(day["sunset"], data),
+            "hours": [{"ts": _epoch(h["time"], data), "temp": h["temp"],
+                       "code": _code_at(data, h["time"]), "day": _is_day(h["time"], day),
+                       "rain": h["rain"] or 0, "wind": h["wind"]} for h in hours],
+        })
+    today = days[0] if days else None
+    return {
+        "place": data["place"],
+        "unit": "F" if _imperial() else "C",
+        "wind_unit": "mph" if _imperial() else "km/h",
+        "current": {
+            "temp": round(current.get("temperature_2m", 0)),
+            "code": int(current.get("weather_code", 0)),
+            "day": bool(current.get("is_day", 1)),
+            "condition": _condition(current.get("weather_code")),
+            "high": today["high"] if today else 0, "low": today["low"] if today else 0,
+        },
+        "hourly": upcoming,
+        "days": out_days,
+    }
+
+
+def _code_for_day(data: dict, day: date) -> int:
+    daily = data["daily"]
+    return int(daily["weather_code"][daily["time"].index(day.isoformat())])
+
+
+def _code_at(data: dict, moment: datetime) -> int:
+    hourly = data["hourly"]
+    return int(hourly["weather_code"][hourly["time"].index(moment.strftime("%Y-%m-%dT%H:%M"))])
+
+
 def current_conditions() -> Optional[dict]:
     """Now, for the device's home screen: {"temp", "unit", "condition", "code",
     "is_day", "as_of"} with as_of the Unix time of the reading, or None."""
@@ -307,7 +375,8 @@ class WeatherPlugin(Plugin):
                           f"{day['condition']}{rain}",
                 detail=_hourly_text(data, day, now),
             ))
-        return DeviceView(view_type="list", title=f"Weather, {data['place']}", items=items)
+        return DeviceView(view_type="weather", title=f"Weather, {data['place']}", items=items,
+                          data=_device_data(data))
 
 
 # Open-Meteo reports US states by full name; this lets "Portland, OR" pick Oregon.

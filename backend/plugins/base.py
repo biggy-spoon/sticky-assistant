@@ -83,10 +83,14 @@ class DeviceView:
     plugin hub) can describe a screen but never execute code on the
     device.
     """
-    view_type: str  # "text" | "list" | "agenda" (a list of timed items, grouped by day)
+    view_type: str  # "text" | "list" | "agenda" (timed items, grouped by day) | "weather"
     title: str
     body: Optional[str] = None                    # view_type == "text"
     items: Optional[list[DeviceViewItem]] = None   # view_type == "list"
+    # Structured content for a view type the firmware draws specially
+    # ("weather"). Keep `items` filled too: firmware that doesn't know the
+    # type shows them as a plain list.
+    data: Optional[dict] = None
 
 
 class Plugin(ABC):

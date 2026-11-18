@@ -59,6 +59,41 @@ struct ListRow {
     bool selected = false;    // ... the one chosen
 };
 
+struct WeatherHour {
+    int64_t ts = 0;  // Unix time
+    int temp = 0;
+    int code = 0;  // WMO weather code
+    bool daytime = true;
+    int rain = 0;  // chance, percent
+    int wind = 0;
+};
+
+struct WeatherDay {
+    int64_t ts = 0;  // local midnight
+    int code = 0;
+    int low = 0;
+    int high = 0;
+    int rain = 0;
+    std::string condition;
+    int64_t sunrise = 0;
+    int64_t sunset = 0;
+    std::vector<WeatherHour> hours;  // every three hours
+};
+
+struct WeatherInfo {
+    std::string place;
+    char unit = 'F';
+    std::string wind_unit;
+    int temp = 0;
+    int code = 0;
+    bool daytime = true;
+    std::string condition;
+    int high = 0;
+    int low = 0;
+    std::vector<WeatherHour> hourly;  // from this hour on
+    std::vector<WeatherDay> days;
+};
+
 struct KeyboardInfo {
     std::string title;
     std::string text;  // typed so far
@@ -105,6 +140,12 @@ void ShowAgenda(const std::string& title, const std::vector<AgendaItem>& items, 
                 bool keep_scroll);
 // with_back shows a back arrow and makes a tap anywhere below the bar go back.
 void ShowDetail(const std::string& title, const std::string& body, PagePos page, bool with_back);
+// The weather in the style of a phone's weather app: now on the left, the next
+// hours and the week on the right. Each day row is a kRow target.
+void ShowWeather(const WeatherInfo& info, PagePos page);
+// One day's hours, conditions and sun. A tap anywhere is kBody (back).
+void ShowWeatherDay(const WeatherInfo& info, int day, PagePos page);
+
 // A text field and an on-screen keyboard. Taps on keys come back from HitTest
 // as kKey with the key's index; KeyAt says what it is.
 void ShowKeyboard(const KeyboardInfo& info, PagePos page);

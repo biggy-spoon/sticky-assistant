@@ -20,7 +20,7 @@ from typing import Optional
 
 from .base import Plugin
 
-log = logging.getLogger("sticky-claude.plugins")
+log = logging.getLogger("sticky-assistant.plugins")
 
 _plugins: dict[str, Plugin] = {}
 

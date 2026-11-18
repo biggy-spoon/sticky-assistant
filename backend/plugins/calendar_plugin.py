@@ -14,7 +14,7 @@ import calendar_service
 import settings
 from .base import DeviceView, DeviceViewItem, Plugin, SettingField
 
-log = logging.getLogger("sticky-claude.plugins.calendar")
+log = logging.getLogger("sticky-assistant.plugins.calendar")
 
 # Device screens are small and glanceable -- cap how many upcoming events
 # get sent down for the on-device list rather than however many the

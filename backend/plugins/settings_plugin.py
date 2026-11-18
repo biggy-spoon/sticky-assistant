@@ -13,7 +13,7 @@ import ai_providers
 import settings
 from .base import DeviceView, DeviceViewItem, Plugin
 
-log = logging.getLogger("sticky-claude.plugins.settings")
+log = logging.getLogger("sticky-assistant.plugins.settings")
 
 # What the device that's asking can do, set by app.py per request: whether its
 # firmware was built with a custom font, and that font's name.

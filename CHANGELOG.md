@@ -45,7 +45,7 @@ tracked under Unreleased until there's a first stable cut.
   "copy its file into `backend/plugins/`, restart" -- no code changes.
 - Plugin hub: a new `GET /api/plugin-hub` endpoint and dashboard card
   surface a community-maintained index of third-party plugins from the
-  companion [`sticky-claude-plugin-hub`](https://github.com/biggy-spoon/sticky-claude-plugin-hub)
+  companion [`sticky-assistant-plugin-hub`](https://github.com/biggy-spoon/sticky-assistant-plugin-hub)
   repo. The hub is metadata only -- it never fetches or runs a plugin's
   code automatically.
 - Dashboard split into tabs (Overview, Plugins, Plugin hub, History)

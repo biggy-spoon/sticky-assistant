@@ -1514,6 +1514,229 @@ void RenderDetail(const std::string& title, const std::string& body, PagePos pag
     Present(screen, "detail:" + title);
 }
 
+// --- weather -----------------------------------------------------------------------------
+
+std::string Degrees(int value) { return std::to_string(value) + "\xC2\xB0"; }
+
+// "2PM", "12AM": an hour on the strip.
+std::string HourLabel(int64_t ts) {
+    const struct tm t = LocalTm(ts);
+    const int hour = t.tm_hour % 12 == 0 ? 12 : t.tm_hour % 12;
+    return std::to_string(hour) + (t.tm_hour < 12 ? "AM" : "PM");
+}
+
+std::string DayName(int64_t ts, bool full) {
+    const int64_t day = LocalDay(ts + 12 * 3600);  // noon: clear of any offset edge
+    const int64_t today = LocalDay(Now());
+    if (day == today) return "Today";
+    const struct tm t = LocalTm(ts + 12 * 3600);
+    if (full) {
+        char out[40];
+        snprintf(out, sizeof(out), "%s, %.3s %d", kWeekdays[t.tm_wday], kMonths[t.tm_mon], t.tm_mday);
+        return day == today + 1 ? std::string("Tomorrow, ") + (out + strlen(kWeekdays[t.tm_wday]) + 2)
+                                : std::string(out);
+    }
+    return std::string(kWeekdays[t.tm_wday]).substr(0, 3);
+}
+
+lv_obj_t* Card(lv_obj_t* screen, lv_coord_t x, lv_coord_t y, lv_coord_t w, lv_coord_t h) {
+    lv_obj_t* card = Plain(screen);
+    lv_obj_set_pos(card, x, y);
+    lv_obj_set_size(card, w, h);
+    lv_obj_set_style_radius(card, 14, 0);
+    lv_obj_set_style_border_width(card, 2, 0);
+    lv_obj_set_style_border_color(card, lv_color_black(), 0);
+    return card;
+}
+
+lv_obj_t* SmallCaps(lv_obj_t* parent, const char* text, lv_coord_t x, lv_coord_t y) {
+    lv_obj_t* label = Label(parent, g_fonts->sans_16, text, LV_LABEL_LONG_CLIP);
+    lv_obj_set_pos(label, x, y);
+    return label;
+}
+
+void WeatherIconAt(lv_obj_t* parent, int size, int code, bool daytime, lv_coord_t x, lv_coord_t y) {
+    lv_obj_t* icon = Canvas(parent, size, size);
+    lv_obj_set_pos(icon, x, y);
+    WeatherNowIcon(icon, size, code, daytime);
+}
+
+// A column of the hourly strip: the time, an icon, the temperature, and the
+// chance of rain when it's worth knowing (Apple shows it from 20%).
+void HourColumn(lv_obj_t* card, const WeatherHour& hour, const std::string& when, lv_coord_t x,
+                lv_coord_t w, bool with_wind, const std::string& wind_unit) {
+    lv_obj_t* time = Label(card, g_fonts->sans_16, when, LV_LABEL_LONG_CLIP, w);
+    lv_obj_set_style_text_align(time, LV_TEXT_ALIGN_CENTER, 0);
+    lv_obj_set_pos(time, x, 10);
+    WeatherIconAt(card, 36, hour.code, hour.daytime, x + (w - 36) / 2, 36);
+    lv_obj_t* temp = Label(card, g_fonts->bold_24, Degrees(hour.temp), LV_LABEL_LONG_CLIP, w);
+    lv_obj_set_style_text_align(temp, LV_TEXT_ALIGN_CENTER, 0);
+    lv_obj_set_pos(temp, x, 80);
+    lv_coord_t y = 112;
+    if (hour.rain >= 20) {
+        lv_obj_t* rain = Label(card, g_fonts->sans_16, std::to_string(hour.rain) + "%",
+                               LV_LABEL_LONG_CLIP, w);
+        lv_obj_set_style_text_align(rain, LV_TEXT_ALIGN_CENTER, 0);
+        lv_obj_set_pos(rain, x, y);
+    }
+    if (with_wind) {
+        lv_obj_t* wind = Label(card, g_fonts->sans_16, std::to_string(hour.wind) + " " + wind_unit,
+                               LV_LABEL_LONG_CLIP, w);
+        lv_obj_set_style_text_align(wind, LV_TEXT_ALIGN_CENTER, 0);
+        lv_obj_set_pos(wind, x, y + 26);
+    }
+}
+
+void RenderWeather(const WeatherInfo& info, PagePos page) {
+    s_total_pages = page.total;
+    lv_obj_t* screen = NewScreen();
+    BuildBar(screen, "Weather", true, page);
+
+    // Now, on the left.
+    constexpr lv_coord_t kLeftW = 262;
+    lv_obj_t* place = Label(screen, g_fonts->sans_24, SanitizeText(info.place), LV_LABEL_LONG_DOT, kLeftW);
+    lv_obj_set_pos(place, kGutter, kBarH + 12);
+    WeatherIconAt(screen, 72, info.code, info.daytime, kGutter - 4, kBarH + 50);
+    lv_obj_t* temp = Label(screen, g_fonts->bold_52, Degrees(info.temp), LV_LABEL_LONG_CLIP);
+    lv_obj_set_pos(temp, kGutter + 84, kBarH + 52);
+    lv_obj_t* condition = Label(screen, g_fonts->sans_24, SanitizeText(info.condition),
+                                LV_LABEL_LONG_DOT, kLeftW);
+    lv_obj_set_pos(condition, kGutter, kBarH + 132);
+    lv_obj_t* range = Label(screen, g_fonts->bold_18,
+                            "H:" + Degrees(info.high) + "   L:" + Degrees(info.low), LV_LABEL_LONG_CLIP);
+    lv_obj_set_pos(range, kGutter, kBarH + 166);
+    if (!info.days.empty()) {
+        const WeatherDay& today = info.days[0];
+        lv_obj_t* sun = Label(screen, g_fonts->sans_18,
+                              "Sunrise " + ClockText12(LocalTm(today.sunrise)) + "\nSunset " +
+                                  ClockText12(LocalTm(today.sunset)),
+                              LV_LABEL_LONG_CLIP);
+        lv_obj_set_pos(sun, kGutter, kBarH + 214);
+        if (today.rain >= 20) {
+            lv_obj_t* rain = Label(screen, g_fonts->sans_18,
+                                   std::to_string(today.rain) + "% chance of rain today",
+                                   LV_LABEL_LONG_DOT, kLeftW);
+            lv_obj_set_pos(rain, kGutter, kBarH + 270);
+        }
+    }
+
+    // The next hours, top right.
+    constexpr lv_coord_t kRightX = 300;
+    constexpr lv_coord_t kRightW = kW - kRightX - 16;
+    lv_obj_t* hours = Card(screen, kRightX, kBarH + 8, kRightW, 146);
+    const int columns = LV_MIN(7, static_cast<int>(info.hourly.size()));
+    const lv_coord_t column_w = (kRightW - 8) / 7;
+    for (int i = 0; i < columns; ++i) {
+        HourColumn(hours, info.hourly[i], i == 0 ? "Now" : HourLabel(info.hourly[i].ts),
+                   4 + i * column_w, column_w, false, "");
+    }
+
+    // The week, bottom right: each day's range on a bar spanning the week's.
+    lv_obj_t* week = Card(screen, kRightX, kBarH + 162, kRightW, kH - kBarH - 170);
+    SmallCaps(week, "7-DAY FORECAST", 16, 8);
+    int week_low = 1000;
+    int week_high = -1000;
+    for (const WeatherDay& day : info.days) {
+        week_low = LV_MIN(week_low, day.low);
+        week_high = LV_MAX(week_high, day.high);
+    }
+    const int span = LV_MAX(week_high - week_low, 1);
+    constexpr lv_coord_t kRowH = 32;
+    constexpr lv_coord_t kBarX = 196;
+    constexpr lv_coord_t kBarW = 150;
+    for (size_t i = 0; i < info.days.size() && i < 7; ++i) {
+        const WeatherDay& day = info.days[i];
+        lv_obj_t* row = Plain(week);
+        lv_obj_set_pos(row, 4, 34 + static_cast<lv_coord_t>(i) * kRowH);
+        lv_obj_set_size(row, kRightW - 12, kRowH);
+        AddTarget(row, HitKind::kRow, static_cast<int>(i));
+        lv_obj_t* name = Label(row, g_fonts->bold_18, DayName(day.ts, false), LV_LABEL_LONG_CLIP, 70);
+        lv_obj_align(name, LV_ALIGN_LEFT_MID, 10, 0);
+        WeatherIconAt(row, 28, day.code, true, 84, 2);
+        if (day.rain >= 20) {
+            lv_obj_t* rain = Label(row, g_fonts->sans_16, std::to_string(day.rain) + "%",
+                                   LV_LABEL_LONG_CLIP);
+            lv_obj_align(rain, LV_ALIGN_LEFT_MID, 116, 0);
+        }
+        lv_obj_t* low = Label(row, g_fonts->sans_18, Degrees(day.low), LV_LABEL_LONG_CLIP, 40);
+        lv_obj_set_style_text_align(low, LV_TEXT_ALIGN_RIGHT, 0);
+        lv_obj_align(low, LV_ALIGN_LEFT_MID, kBarX - 46, 0);
+        lv_obj_t* track = Plain(row);
+        lv_obj_set_size(track, kBarW, 8);
+        lv_obj_set_style_radius(track, 4, 0);
+        lv_obj_set_style_border_width(track, 1, 0);
+        lv_obj_set_style_border_color(track, lv_color_black(), 0);
+        lv_obj_align(track, LV_ALIGN_LEFT_MID, kBarX, 0);
+        lv_obj_t* fill = Plain(track);
+        const lv_coord_t from = (day.low - week_low) * (kBarW - 2) / span;
+        const lv_coord_t to = (day.high - week_low) * (kBarW - 2) / span;
+        lv_obj_set_pos(fill, from, 0);
+        lv_obj_set_size(fill, LV_MAX(to - from, 6), 8);
+        lv_obj_set_style_radius(fill, 4, 0);
+        lv_obj_set_style_bg_opa(fill, LV_OPA_COVER, 0);
+        lv_obj_set_style_bg_color(fill, lv_color_black(), 0);
+        lv_obj_t* high = Label(row, g_fonts->bold_18, Degrees(day.high), LV_LABEL_LONG_CLIP);
+        lv_obj_align(high, LV_ALIGN_LEFT_MID, kBarX + kBarW + 10, 0);
+        Label(row, g_fonts->sans_16, LV_SYMBOL_RIGHT, LV_LABEL_LONG_CLIP);
+        lv_obj_align(lv_obj_get_child(row, lv_obj_get_child_cnt(row) - 1), LV_ALIGN_RIGHT_MID, -8, 0);
+    }
+    Present(screen, "weather");
+}
+
+void RenderWeatherDay(const WeatherInfo& info, int index, PagePos page) {
+    s_total_pages = page.total;
+    lv_obj_t* screen = NewScreen();
+    BuildBar(screen, "Weather", true, page);
+    if (index < 0 || index >= static_cast<int>(info.days.size())) {
+        Present(screen, "weather-day");
+        return;
+    }
+    const WeatherDay& day = info.days[index];
+
+    lv_obj_t* header = Plain(screen);
+    lv_obj_set_pos(header, kGutter, kBarH + 10);
+    lv_obj_set_size(header, kW - 2 * kGutter, 48);
+    lv_obj_set_layout(header, LV_LAYOUT_FLEX);
+    lv_obj_set_flex_flow(header, LV_FLEX_FLOW_ROW);
+    lv_obj_set_flex_align(header, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
+    lv_obj_set_style_pad_column(header, 12, 0);
+    Label(header, g_fonts->bold_24, LV_SYMBOL_LEFT, LV_LABEL_LONG_CLIP);
+    Label(header, g_fonts->bold_34, DayName(day.ts, true), LV_LABEL_LONG_CLIP);
+    Rule(screen, kGutter, kBarH + 62, kW - 2 * kGutter, 2);
+
+    // The day on the left.
+    constexpr lv_coord_t kTop = kBarH + 76;
+    WeatherIconAt(screen, 72, day.code, true, kGutter - 4, kTop);
+    lv_obj_t* range = Label(screen, g_fonts->bold_34, Degrees(day.high) + " / " + Degrees(day.low),
+                            LV_LABEL_LONG_CLIP);
+    lv_obj_set_pos(range, kGutter + 80, kTop + 16);
+    lv_obj_t* condition = Label(screen, g_fonts->sans_24, SanitizeText(day.condition),
+                                LV_LABEL_LONG_DOT, 262);
+    lv_obj_set_pos(condition, kGutter, kTop + 84);
+    std::string facts = std::to_string(day.rain) + "% chance of rain\nSunrise " +
+                        ClockText12(LocalTm(day.sunrise)) + "\nSunset " +
+                        ClockText12(LocalTm(day.sunset));
+    lv_obj_t* facts_label = Label(screen, g_fonts->sans_18, facts, LV_LABEL_LONG_CLIP);
+    lv_obj_set_pos(facts_label, kGutter, kTop + 124);
+
+    // Its hours, every three, on the right.
+    constexpr lv_coord_t kRightX = 300;
+    constexpr lv_coord_t kRightW = kW - kRightX - 16;
+    lv_obj_t* card = Card(screen, kRightX, kTop, kRightW, 186);
+    const int columns = LV_MIN(8, static_cast<int>(day.hours.size()));
+    const lv_coord_t column_w = (kRightW - 8) / 8;
+    for (int i = 0; i < columns; ++i) {
+        HourColumn(card, day.hours[i], HourLabel(day.hours[i].ts), 4 + i * column_w, column_w, true,
+                   info.wind_unit);
+    }
+
+    lv_obj_t* body_target = Plain(screen);  // a tap anywhere goes back
+    lv_obj_set_pos(body_target, 0, kBarH);
+    lv_obj_set_size(body_target, kW, kH - kBarH);
+    AddTarget(body_target, HitKind::kBody, -1);
+    Present(screen, "weather-day");
+}
+
 // --- keyboard ------------------------------------------------------------------------
 
 struct Key {
@@ -1842,6 +2065,14 @@ void CleanScreen() {
         lv_refr_now(nullptr);
         s_force_full = false;
     });
+}
+
+void ShowWeather(const WeatherInfo& info, PagePos page) {
+    Post([info, page] { RenderWeather(info, page); });
+}
+
+void ShowWeatherDay(const WeatherInfo& info, int day, PagePos page) {
+    Post([info, day, page] { RenderWeatherDay(info, day, page); });
 }
 
 void ShowKeyboard(const KeyboardInfo& info, PagePos page) {

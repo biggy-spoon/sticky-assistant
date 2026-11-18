@@ -106,7 +106,7 @@ def local_timezone() -> tzinfo:
         try:
             return ZoneInfo(name)
         except (ZoneInfoNotFoundError, ValueError):
-            logging.getLogger("sticky-claude").warning("Unknown timezone %r, using the server's", name)
+            logging.getLogger("sticky-assistant").warning("Unknown timezone %r, using the server's", name)
     return datetime.now().astimezone().tzinfo
 
 

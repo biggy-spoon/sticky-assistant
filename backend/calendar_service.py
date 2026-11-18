@@ -18,7 +18,7 @@ from typing import Optional
 
 import settings
 
-log = logging.getLogger("sticky-claude.calendar")
+log = logging.getLogger("sticky-assistant.calendar")
 
 
 @dataclass
@@ -95,7 +95,7 @@ class CalDavProvider(CalendarProvider):
         from icalendar import Event as ICalEvent
 
         ical = ICalendar()
-        ical.add("prodid", "-//sticky-claude//EN")
+        ical.add("prodid", "-//sticky-assistant//EN")
         ical.add("version", "2.0")
         vevent = ICalEvent()
         vevent.add("summary", event.summary)

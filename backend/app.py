@@ -1,7 +1,8 @@
-"""Voice-to-Claude proxy for the reTerminal Sticky, plus a small dashboard.
+"""Voice assistant proxy for the reTerminal Sticky, plus a small dashboard.
 
 Receives a WAV recording from the device, transcribes it locally with
-faster-whisper, sends the transcript to Claude (with whatever tools the
+faster-whisper, sends the transcript to the configured AI model (see
+ai_providers.py; Claude by default), with whatever tools the
 configured plugins contribute -- see plugins/ -- so it can actually act,
 not just talk about acting), and returns the transcript + reply as JSON
 for the device to render. The dashboard (see dashboard.html) exposes
@@ -31,7 +32,7 @@ import storage
 load_dotenv()
 
 logging.basicConfig(level=logging.INFO)
-log = logging.getLogger("sticky-claude")
+log = logging.getLogger("sticky-assistant")
 
 # Whisper is loaded once at startup; changing these needs a restart.
 WHISPER_MODEL_SIZE = os.getenv("WHISPER_MODEL_SIZE", "small")
@@ -75,7 +76,7 @@ def _remember(question: str, answer: str) -> None:
     with _memory_lock:
         _memory.append((time.time(), question, answer))
 
-app = FastAPI(title="sticky-claude backend")
+app = FastAPI(title="sticky-assistant backend")
 whisper_model: WhisperModel | None = None
 
 DASHBOARD_PATH = os.path.join(os.path.dirname(__file__), "dashboard.html")
@@ -351,6 +352,7 @@ def api_device_views(fonts: str = "", font_name: str = "") -> dict:
         views.append({
             "plugin_id": plugin.id,
             "view_type": view.view_type,
+            "data": view.data,
             "title": view.title,
             "body": view.body,
             "items": [{"id": item.id, "text": item.text, "secondary": item.secondary,

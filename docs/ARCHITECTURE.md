@@ -52,7 +52,7 @@ endpoint for STT.
 The device ships unconfigured. On boot, `settings_service` checks NVS for
 saved WiFi credentials and a backend URL; if none exist, `main.cpp` starts
 `captive_portal` instead of the normal flow: an open WiFi AP
-(`StickyClaude-Setup`), a DNS server that answers every query with
+(`StickyAssistant-Setup`), a DNS server that answers every query with
 its own IP (the standard trick that makes phones auto-open the setup
 page), and an HTTP form. Submitting the form saves to NVS and reboots the
 device into normal operation. This replaced an earlier Kconfig/recompile-
@@ -166,7 +166,7 @@ repository is MIT.
   and an older model rejects the whole request if sent the newer version.
 - `plugin_hub.py` + `GET /api/plugin-hub` — fetches and caches
   `index.json` from the separate
-  [`sticky-claude-plugin-hub`](https://github.com/biggy-spoon/sticky-claude-plugin-hub)
+  [`sticky-assistant-plugin-hub`](https://github.com/biggy-spoon/sticky-assistant-plugin-hub)
   repo, a community-maintained list of third-party plugins (metadata
   only: name, description, repo URL). The dashboard shows it alongside
   which ones are already installed. This never fetches or executes a

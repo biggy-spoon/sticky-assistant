@@ -23,7 +23,7 @@ import requests
 
 import settings
 
-log = logging.getLogger("sticky-claude.ai")
+log = logging.getLogger("sticky-assistant.ai")
 
 PROVIDERS = {
     "anthropic": "Claude (Anthropic)",

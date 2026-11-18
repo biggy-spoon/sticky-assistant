@@ -1,4 +1,4 @@
-# sticky-claude firmware
+# sticky-assistant firmware
 
 ESP-IDF (C++) firmware for the Seeed Studio reTerminal Sticky (ESP32-S3R8).
 Hold the AI/record button, speak, release — the clip gets POSTed to the
@@ -43,7 +43,7 @@ that itself on first boot (see "First-run setup" below).
 ### First-run setup
 
 On first boot (or after a factory reset / NVS erase), the device opens an
-open WiFi access point named `StickyClaude-Setup`. Connect to it from a
+open WiFi access point named `StickyAssistant-Setup`. Connect to it from a
 phone or laptop; a setup page should open automatically (the captive
 portal trick), or browse to `http://192.168.4.1/` manually. Enter your
 real WiFi credentials and your backend's `/converse` URL

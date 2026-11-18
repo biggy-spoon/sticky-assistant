@@ -11,7 +11,7 @@ import settings
 import storage
 from .base import DeviceView, DeviceViewItem, Plugin
 
-log = logging.getLogger("sticky-claude.plugins.todo")
+log = logging.getLogger("sticky-assistant.plugins.todo")
 
 _TOOLS = [
     {

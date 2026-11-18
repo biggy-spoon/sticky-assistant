@@ -1,4 +1,4 @@
-# Contributing to sticky-claude
+# Contributing to sticky-assistant
 
 Thanks for taking a look. This is a small hobby/open-source project, not a
 corporate one, so the bar is "be kind and explain your reasoning," not a

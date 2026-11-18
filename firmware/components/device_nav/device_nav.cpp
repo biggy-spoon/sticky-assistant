@@ -69,6 +69,7 @@ struct View {
     std::string title;
     std::string body;
     std::vector<Item> items;
+    std::string data_json;  // the view's structured "data", as fetched
 
     bool operator==(const View&) const = default;
 };
@@ -263,6 +264,14 @@ bool FetchViews(std::vector<View>* out_views, Clock* out_clock) {
         view.view_type = JsonString(view_json, "view_type");
         view.title = JsonString(view_json, "title");
         view.body = JsonString(view_json, "body");
+        const cJSON* data = cJSON_GetObjectItemCaseSensitive(view_json, "data");
+        if (cJSON_IsObject(data)) {
+            char* printed = cJSON_PrintUnformatted(data);
+            if (printed != nullptr) {
+                view.data_json = printed;
+                cJSON_free(printed);
+            }
+        }
 
         cJSON* item_json = nullptr;
         cJSON_ArrayForEach(item_json, cJSON_GetObjectItemCaseSensitive(view_json, "items")) {
@@ -420,6 +429,57 @@ ui::HomeInfo BuildHome() {
     return info;
 }
 
+ui::WeatherHour ParseHour(const cJSON* json) {
+    ui::WeatherHour hour;
+    hour.ts = JsonInt(json, "ts");
+    hour.temp = static_cast<int>(JsonInt(json, "temp"));
+    hour.code = static_cast<int>(JsonInt(json, "code"));
+    hour.daytime = cJSON_IsTrue(cJSON_GetObjectItemCaseSensitive(json, "day"));
+    hour.rain = static_cast<int>(JsonInt(json, "rain"));
+    hour.wind = static_cast<int>(JsonInt(json, "wind"));
+    return hour;
+}
+
+bool ParseWeather(const std::string& data_json, ui::WeatherInfo* info) {
+    cJSON* root = cJSON_ParseWithLength(data_json.c_str(), data_json.size());
+    if (root == nullptr) {
+        return false;
+    }
+    info->place = JsonString(root, "place");
+    const std::string unit = JsonString(root, "unit");
+    info->unit = unit.empty() ? 'F' : unit[0];
+    info->wind_unit = JsonString(root, "wind_unit");
+    const cJSON* now = cJSON_GetObjectItemCaseSensitive(root, "current");
+    info->temp = static_cast<int>(JsonInt(now, "temp"));
+    info->code = static_cast<int>(JsonInt(now, "code"));
+    info->daytime = cJSON_IsTrue(cJSON_GetObjectItemCaseSensitive(now, "day"));
+    info->condition = JsonString(now, "condition");
+    info->high = static_cast<int>(JsonInt(now, "high"));
+    info->low = static_cast<int>(JsonInt(now, "low"));
+    const cJSON* json = nullptr;
+    cJSON_ArrayForEach(json, cJSON_GetObjectItemCaseSensitive(root, "hourly")) {
+        info->hourly.push_back(ParseHour(json));
+    }
+    cJSON_ArrayForEach(json, cJSON_GetObjectItemCaseSensitive(root, "days")) {
+        ui::WeatherDay day;
+        day.ts = JsonInt(json, "ts");
+        day.code = static_cast<int>(JsonInt(json, "code"));
+        day.low = static_cast<int>(JsonInt(json, "low"));
+        day.high = static_cast<int>(JsonInt(json, "high"));
+        day.rain = static_cast<int>(JsonInt(json, "rain"));
+        day.condition = JsonString(json, "condition");
+        day.sunrise = JsonInt(json, "sunrise");
+        day.sunset = JsonInt(json, "sunset");
+        const cJSON* hour = nullptr;
+        cJSON_ArrayForEach(hour, cJSON_GetObjectItemCaseSensitive(json, "hours")) {
+            day.hours.push_back(ParseHour(hour));
+        }
+        info->days.push_back(std::move(day));
+    }
+    cJSON_Delete(root);
+    return true;
+}
+
 // Draws the current page. Caller must hold the lock, as for every *Locked
 // function here.
 void RenderCurrentLocked(bool keep_scroll) {
@@ -438,6 +498,17 @@ void RenderCurrentLocked(bool keep_scroll) {
         s_page = kHomePage;
         ui::ShowHome(BuildHome(), {kHomePage, TotalPages()});
         return;
+    }
+    if (view->view_type == "weather" && !view->data_json.empty()) {
+        ui::WeatherInfo weather;
+        if (ParseWeather(view->data_json, &weather)) {
+            if (s_detail_row >= 0) {
+                ui::ShowWeatherDay(weather, s_detail_row, page);
+            } else {
+                ui::ShowWeather(weather, page);
+            }
+            return;
+        }
     }
     if (s_detail_row >= 0 && s_detail_row < static_cast<int>(view->items.size())) {
         const Item& item = view->items[s_detail_row];
