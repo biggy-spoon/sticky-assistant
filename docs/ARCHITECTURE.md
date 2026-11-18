@@ -20,7 +20,11 @@
 - Battery: a BQ27220 fuel gauge at 0x55 on a second I2C bus (SCL GPIO0, SDA
   GPIO1), USB power on GPIO9, and the BQ25616 charger's active-low enable on
   GPIO39, which `power_service` drives low so the battery charges. These come
-  from the Sticky OS firmware's pin map.
+  from the Sticky OS firmware's pin map. On this board I2C controller 1 stops
+  working after its first transaction (every device on that bus then times
+  out, with both lines idle high), so `power_service` sets the bus up fresh for
+  each reading. The gauge's first answer after waking can be stale, so the
+  percentage is read twice.
 - Flash: 32MB on the board, configured as 16MB (the most without 32-bit
   addressing), with a 6MB app partition.
 

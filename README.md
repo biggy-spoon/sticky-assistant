@@ -28,9 +28,19 @@ calendar and it actually will.
   Up/Down buttons to move between pages. Swipe up or down to scroll, tap a
   calendar event for its details, and tap a todo to check it off. Finished todos
   drop off the list at midnight, and unfinished ones carry over.
-- **Sleeps when idle**: after 5 minutes without a touch or button press it
-  freezes the current screen (e-paper keeps the picture with no power) and
-  sleeps. Any button wakes it on the same page.
+- **Sleeps when idle**: after 5 minutes without a touch or button press, or a
+  single press of the top button on home, it freezes the current screen with an
+  "Asleep" banner (e-paper keeps the picture with no power) and sleeps. Any
+  button wakes it on the same page.
+- **Weather**: the current conditions on the home screen and a 7-day forecast
+  page where tapping a day shows its hours, from
+  [Open-Meteo](https://open-meteo.com) (free, no API key).
+- **Settings on the device**: units, timezone, weather location and font, also
+  on the dashboard and changeable by voice ("switch to metric").
+- **A calendar Claude can edit**: "move my dentist appointment to Friday at 3"
+  moves it; events can also be renamed or deleted.
+- **Follow-up questions**: the last few exchanges are remembered for ten
+  minutes, so "yes, that one" makes sense.
 - **No-recompile setup**: first boot opens a WiFi access point with a
   browser-based setup page for WiFi credentials and your backend's
   address. Settings are saved to the device's flash.
