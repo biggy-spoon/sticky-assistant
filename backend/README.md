@@ -28,20 +28,29 @@ docker build -t sticky-assistant-backend .
 docker run -p 8000:8000 --env-file .env sticky-assistant-backend
 ```
 
-## Dashboard
+## Settings page
 
-Open `http://<backend-host>:8000/dashboard` in a browser. It shows recent
-conversations, device status, each installed plugin's settings (and, for
-plugins that have one, a data view — calendar's is "Upcoming events"),
-and lets you edit the Anthropic API key and Claude model. None of this
-needs touching `.env` or restarting (the Whisper settings are the
-exception — those load once at startup, so changing them still needs a
-restart).
+The settings page is served by the device, not the backend: open the
+Sticky's address in a browser (its Settings page shows it, and
+`http://<backend-host>:8000/dashboard` redirects there). The page calls this
+backend's `/api/*` routes directly from the browser, which is why the backend
+allows cross-origin requests, but only from home-network addresses (10.x,
+172.16-31.x, 192.168.x, localhost). It shows recent conversations, status,
+the AI provider and keys, each plugin's settings and data view, and the plugin
+hub. None of this needs touching `.env` or restarting (the Whisper settings
+are the exception: they load once at startup).
 
-**There is no authentication on the dashboard or its API.** It's meant for
-your home LAN, same trust model as the device's own setup portal. Don't
-port-forward it to the public internet without putting something in front
-of it.
+**There is no authentication on the API.** It's meant for your home LAN,
+same trust model as the device's own setup portal. Don't port-forward it to
+the public internet without putting something in front of it.
+
+### Installing plugins from the hub
+
+A plugin is code that runs on this backend, so the settings page and the
+device only install hub entries marked `"reviewed": true` with a
+`download_url` to a single `.py` file on raw.githubusercontent.com. The file
+is checked (size, name), saved to `plugins/`, and loaded without a restart.
+Anything else is still installed by hand.
 
 ## Plugins
 
@@ -102,7 +111,8 @@ about it.
 - `GET /health` — model/config status.
 - `POST /converse` — body is raw WAV bytes (16-bit PCM mono, see firmware's
   `recording_service`). Returns JSON `{"transcript": "...", "reply": "..."}`.
-- `GET /dashboard` — the web dashboard.
+- `GET /dashboard` — redirects to the settings page on the device.
+- `POST /api/plugin-hub/{id}/install` — installs a reviewed hub plugin.
 - `GET /api/history`, `GET /api/status`, `GET`/`POST /api/settings` —
   core data, also usable directly.
 - `GET /api/plugins` — every plugin's id/name/description/configured

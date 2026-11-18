@@ -1,14 +1,22 @@
 """Fetches the community plugin-hub index (biggy-spoon/sticky-assistant-plugin-hub)
-so the dashboard can show what plugins exist beyond the ones already
-installed. This only ever reads metadata -- it never downloads or runs a
-plugin's code. Installing a plugin is a manual step (copy its files into
-backend/plugins/ and restart), by design: see that repo's README for why.
+so the device's settings page can show what plugins exist beyond the ones
+already installed.
+
+A plugin is code that runs on this server, so installing one from the device
+is limited to entries the hub's maintainers have marked "reviewed": true, with
+a "download_url" to a single Python file on raw.githubusercontent.com. Anything
+else is still installed by hand (copy it into backend/plugins/ and restart):
+see the hub's README.
 """
 import logging
+import os
+import re
 import time
 from typing import Optional
 
 import requests
+
+import plugins
 
 log = logging.getLogger("sticky-assistant.plugin_hub")
 
@@ -41,3 +49,62 @@ def get_index(force: bool = False) -> tuple[list[dict], Optional[str]]:
         if _cache is not None:
             return _cache, None
         return [], str(exc)
+
+
+_PLUGINS_DIR = os.path.join(os.path.dirname(__file__), "plugins")
+_MAX_PLUGIN_BYTES = 200 * 1024
+_RAW_PREFIX = "https://raw.githubusercontent.com/"
+_MODULE_NAME = re.compile(r"^[a-z][a-z0-9_]{1,40}$")
+
+
+# Set by app.py: mounts a newly installed plugin's HTTP routes.
+route_registrar = None
+
+
+class InstallError(Exception):
+    """Why a plugin can't be installed, fit to show the user."""
+
+
+def installable(entry: dict) -> bool:
+    url = str(entry.get("download_url") or "")
+    return entry.get("reviewed") is True and url.startswith(_RAW_PREFIX) and url.endswith(".py")
+
+
+def install(plugin_id: str, register_routes=None) -> str:
+    register_routes = register_routes or route_registrar
+    """Downloads a reviewed hub plugin into backend/plugins/ and loads it.
+    `register_routes`, if given, is called with each plugin added so its HTTP
+    routes are mounted. Returns the plugin's name."""
+    entries, error = get_index()
+    entry = next((e for e in entries if e.get("id") == plugin_id), None)
+    if entry is None:
+        raise InstallError(error or f"The hub has no plugin called {plugin_id!r}")
+    if plugins.get(plugin_id) is not None:
+        raise InstallError(f"{entry.get('name', plugin_id)} is already installed")
+    if not installable(entry):
+        raise InstallError(f"{entry.get('name', plugin_id)} hasn't been reviewed for installing "
+                           "from the device. Install it by hand, from its repository.")
+    module_name = f"{plugin_id.replace('-', '_')}_plugin"
+    if not _MODULE_NAME.match(module_name):
+        raise InstallError(f"{plugin_id!r} isn't a usable plugin id")
+    path = os.path.join(_PLUGINS_DIR, f"{module_name}.py")
+    if os.path.exists(path):
+        raise InstallError(f"A file called {module_name}.py is already in backend/plugins")
+    try:
+        response = requests.get(entry["download_url"], timeout=15)
+        response.raise_for_status()
+    except requests.RequestException as exc:
+        raise InstallError(f"Couldn't download {entry.get('name', plugin_id)}: {exc}") from exc
+    if len(response.content) > _MAX_PLUGIN_BYTES:
+        raise InstallError("That plugin is larger than a plugin file should be")
+    with open(path, "wb") as out:
+        out.write(response.content)
+    added = plugins.load_module(module_name)
+    if not added:
+        os.remove(path)
+        raise InstallError(f"{entry.get('name', plugin_id)} didn't load, so it was removed again")
+    for plugin in added:
+        if register_routes is not None:
+            register_routes(plugin)
+    log.info("Installed plugin %s from the hub", plugin_id)
+    return entry.get("name", plugin_id)

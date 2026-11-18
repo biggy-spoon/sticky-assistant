@@ -61,6 +61,7 @@ and reboots into normal operation.
 | `recording_service` | PSRAM clip buffer + WAV encoding |
 | `settings_service` | NVS-backed WiFi/backend settings, written by the portal |
 | `captive_portal` | First-run AP + DNS hijack + HTTP setup form |
+| `settings_web` | The settings page on port 80 (embedded `settings.html`), plus `/device/config` for the device's own settings and `/device/ping` to stay awake while the page is open |
 | `wifi_service` | STA connect (using `settings_service` values) + SoftAP mode |
 | `assistant_service` | POSTs the WAV to the backend, parses `{transcript, reply}` |
 | `device_nav` | Page changes, scrolling, taps and "back" across plugin device-views. Draws from a cached `GET /api/device/views` and refreshes in the background; sends toggles with `POST /api/plugins/{id}/device-action` |

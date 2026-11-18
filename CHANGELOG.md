@@ -131,6 +131,14 @@ tracked under Unreleased until there's a first stable cut.
 - The weather page in the style of Apple's Weather app, with a day view.
 - The battery log shows the current, the gauge's flags and the charger pin, to
   confirm charging.
+- The settings page moved onto the device: open the Sticky's address in a
+  browser. It adds the device's own settings (backend address, WiFi, sleep
+  timeout, including never), and keeps the device awake while it's open. The
+  backend no longer serves a dashboard; `/dashboard` redirects to the device.
+- Plugins can be installed from the settings page or the device's Settings
+  page, limited to hub entries marked reviewed, and load without a restart.
+  The device's Settings page lists plugins and shows the settings page's
+  address.
 
 ### Changed
 - `/converse` transcribes and asks the model on a worker thread, so the device

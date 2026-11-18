@@ -13,6 +13,7 @@ struct Settings {
     std::string wifi_ssid;
     std::string wifi_password;
     std::string backend_url;
+    int sleep_minutes = 5;  // idle time before sleep; 0 = never
 };
 
 esp_err_t Init();

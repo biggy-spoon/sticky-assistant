@@ -10,7 +10,10 @@ from typing import Optional
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 import ai_providers
+import plugin_hub
+import plugins
 import settings
+import storage
 from .base import DeviceView, DeviceViewItem, Plugin
 
 log = logging.getLogger("sticky-assistant.plugins.settings")
@@ -157,6 +160,16 @@ class SettingsPlugin(Plugin):
             DeviceViewItem(id="weather_location", text="Weather location",
                            secondary=location or "Not set", action="text", value=location),
         ]
+        items.append(self._plugins_row())
+        address = storage.get_device_status().get("last_ip")
+        items.append(DeviceViewItem(
+            id="settings_page", text="Settings page",
+            secondary=f"http://{address}" if address else "Shown once the device has talked to the backend",
+            detail=("Everything here, plus API keys, calendar accounts and conversation history, "
+                    "on a phone or computer: open "
+                    + (f"http://{address}" if address else "the device's address")
+                    + " in a browser on the same WiFi. The device stays awake while it's open."),
+        ))
         if device_has_custom_font:
             items.append(DeviceViewItem(id="font", text="Font",
                                         secondary=_fonts()[settings.get_device_font()],
@@ -164,7 +177,31 @@ class SettingsPlugin(Plugin):
                                         options=_options(_fonts().items())))
         return DeviceView(view_type="list", title="Settings", items=items)
 
+    def _plugins_row(self) -> DeviceViewItem:
+        """The installed plugins, and the hub's reviewed ones to install."""
+        options = [{"value": f"installed:{plugin.id}", "label": f"{plugin.name} (installed)"}
+                   for plugin in plugins.all_plugins() if plugin.id != "settings"]
+        entries, _error = plugin_hub.get_index()
+        for entry in entries:
+            if plugins.get(entry.get("id", "")) is None and plugin_hub.installable(entry):
+                options.append({"value": f"install:{entry['id']}",
+                                "label": f"Install {entry.get('name', entry['id'])}"})
+        available = len(options) - len(plugins.all_plugins()) + 1
+        return DeviceViewItem(
+            id="plugins", text="Plugins",
+            secondary=f"{len(plugins.all_plugins()) - 1} installed"
+                      + (f", {available} to install" if available > 0 else ""),
+            action="choose", value="", options=options)
+
     def device_input(self, item_id: str, value: str) -> None:
+        if item_id == "plugins":
+            if value.startswith("install:"):
+                try:
+                    name = plugin_hub.install(value.removeprefix("install:"))
+                    log.info("Installed %s from the device", name)
+                except plugin_hub.InstallError as exc:
+                    log.warning("Plugin install from the device failed: %s", exc)
+            return  # picking an installed one does nothing
         value = value.strip()
         if item_id == "ai_provider" and value in ai_providers.PROVIDERS:
             if not ai_providers.provider_configured(value):

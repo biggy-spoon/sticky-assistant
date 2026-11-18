@@ -1,11 +1,13 @@
-"""Voice assistant proxy for the reTerminal Sticky, plus a small dashboard.
+"""Voice assistant proxy for the reTerminal Sticky, plus the API the device's
+settings page uses.
 
 Receives a WAV recording from the device, transcribes it locally with
 faster-whisper, sends the transcript to the configured AI model (see
 ai_providers.py; Claude by default), with whatever tools the
 configured plugins contribute -- see plugins/ -- so it can actually act,
 not just talk about acting), and returns the transcript + reply as JSON
-for the device to render. The dashboard (see dashboard.html) exposes
+for the device to render. The settings page (served by the device; see
+firmware/components/settings_web) reads
 conversation history, settings, device status, and each plugin's own
 view over a small JSON API.
 """
@@ -20,7 +22,8 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 from dotenv import load_dotenv
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.concurrency import run_in_threadpool
-from fastapi.responses import FileResponse, JSONResponse
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse, RedirectResponse
 from faster_whisper import WhisperModel
 
 import ai_providers
@@ -79,10 +82,21 @@ def _remember(question: str, answer: str) -> None:
 app = FastAPI(title="sticky-assistant backend")
 whisper_model: WhisperModel | None = None
 
-DASHBOARD_PATH = os.path.join(os.path.dirname(__file__), "dashboard.html")
+
+# The settings page is served by the device itself and calls this API from the
+# browser, so cross-origin requests are allowed -- from home-network addresses
+# only, the same trust model the backend has always had (no login, LAN only).
+app.add_middleware(
+    CORSMiddleware,
+    allow_origin_regex=(r"^https?://(localhost|127\.0\.0\.1|10(\.\d{1,3}){3}|192\.168(\.\d{1,3}){2}"
+                        r"|172\.(1[6-9]|2\d|3[01])(\.\d{1,3}){2})(:\d+)?$"),
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 for _plugin in plugins.all_plugins():
     _plugin.register_routes(app)
+plugin_hub.route_registrar = lambda plugin: plugin.register_routes(app)
 
 
 @app.on_event("startup")
@@ -191,8 +205,13 @@ def _reply_to(transcript: str) -> str:
 # --- Dashboard ---------------------------------------------------------
 
 @app.get("/dashboard")
-def dashboard() -> FileResponse:
-    return FileResponse(DASHBOARD_PATH)
+def dashboard():
+    """The dashboard moved onto the device: send the browser there."""
+    last_ip = storage.get_device_status().get("last_ip")
+    if last_ip:
+        return RedirectResponse(f"http://{last_ip}/")
+    return JSONResponse({"detail": "The settings page is on the device: open its address "
+                                   "(shown on its Settings page) in a browser."}, status_code=404)
 
 
 @app.get("/api/history")
@@ -324,9 +343,20 @@ def api_plugin_view(plugin_id: str) -> dict:
 def api_plugin_hub() -> dict:
     entries, error = plugin_hub.get_index()
     installed_ids = {plugin.id for plugin in plugins.all_plugins()}
+    entries = [dict(entry) for entry in entries]  # the cache stays as fetched
     for entry in entries:
         entry["installed"] = entry.get("id") in installed_ids
+        entry["installable"] = plugin_hub.installable(entry)
     return {"plugins": entries, "error": error}
+
+
+@app.post("/api/plugin-hub/{plugin_id}/install")
+def api_plugin_hub_install(plugin_id: str) -> dict:
+    try:
+        name = plugin_hub.install(plugin_id, lambda plugin: plugin.register_routes(app))
+    except plugin_hub.InstallError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return {"success": True, "name": name}
 
 
 # --- Device screens (Up/Down button navigation on the ePaper panel) ----

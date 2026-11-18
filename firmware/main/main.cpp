@@ -14,6 +14,7 @@
 #include "power_service.h"
 #include "recording_service.h"
 #include "settings_service.h"
+#include "settings_web.h"
 #include "touch_service.h"
 #include "ui.h"
 #include "wifi_service.h"
@@ -23,7 +24,6 @@ namespace {
 constexpr const char* kTag = "main";
 constexpr uint32_t kMinHoldMs = 400;  // a shorter AI press is a tap, not a recording
 constexpr uint32_t kAssistantTaskStackWords = 6144;
-constexpr int64_t kSleepAfterIdleMs = 5 * 60 * 1000;
 constexpr uint32_t kSleepCheckMs = 5000;
 constexpr uint32_t kSleepDrawTimeoutMs = 10000;
 // A second short AI press within this long is a double press. A single press
@@ -153,7 +153,11 @@ void PowerTask(void*) {
             }
         }
         const bool asked = (actions & kActionSleepNow) != 0;
-        if (!asked && power_service::IdleMs() < kSleepAfterIdleMs) {
+        // The idle time is a device setting (0 = never), changeable on the
+        // settings page, so it's read each time.
+        const int64_t sleep_after_ms =
+            static_cast<int64_t>(settings_service::Get().sleep_minutes) * 60 * 1000;
+        if (!asked && (sleep_after_ms <= 0 || power_service::IdleMs() < sleep_after_ms)) {
             continue;
         }
         if (!device_nav::CanSleep() || (!asked && ui::IsBusy())) {
@@ -161,7 +165,7 @@ void PowerTask(void*) {
         }
         ui::WaitIdle(kSleepDrawTimeoutMs);  // let a screen already drawing finish
         ESP_LOGI(kTag, "going to sleep: %s",
-                 asked ? "asked to" : "idle for five minutes");
+                 asked ? "asked to" : "idle");
         device_nav::PrepareForSleep();
         vTaskDelay(pdMS_TO_TICKS(50));  // let the redraw get queued
         if (!ui::WaitIdle(kSleepDrawTimeoutMs)) {
@@ -234,6 +238,9 @@ extern "C" void app_main() {
         ESP_LOGE(kTag, "WiFi connect failed; recording will work but uploads will fail");
     }
     device_nav::Start(wifi_connected, woke);
+    if (wifi_connected && settings_web::Start() != ESP_OK) {
+        ESP_LOGW(kTag, "settings page unavailable");
+    }
     vTaskDelay(pdMS_TO_TICKS(8000));
     power_service::NoteActivity();  // the five minutes count from here
 
