@@ -33,7 +33,7 @@
   },
   "assets": {
     "preview": "assets/preview.jpg",
-    "previewAlt": "Sticky Assistant's home page on a reTerminal Sticky: the time, the next calendar event and the current weather."
+    "previewAlt": "Sticky Assistant's weather page on a reTerminal Sticky: current conditions, the next hours and a 7-day forecast."
   },
   "tags": [
     "voice",
