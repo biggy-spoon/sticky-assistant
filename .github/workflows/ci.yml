@@ -17,6 +17,31 @@ jobs:
           esp_idf_version: v5.3
           target: esp32s3
           path: "firmware"
+          # The merged image is what the Playground's website form takes.
+          command: idf.py build && esptool.py --chip esp32s3 merge_bin -o build/merged.bin @build/flash_args
+      - name: Package as a release would
+        run: python3 scripts/package_release.py 0.0.0-ci --build firmware/build --out dist
+      - uses: actions/upload-artifact@v4
+        with:
+          name: firmware-package
+          path: dist/
+
+  docker-build:
+    name: Backend Docker image
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build the image
+        run: docker build -t sticky-assistant-backend backend
+      - name: Start it and wait for /health
+        run: |
+          docker run -d --name backend -p 8000:8000 -e WHISPER_MODEL_SIZE=tiny sticky-assistant-backend
+          for i in $(seq 1 60); do
+            if curl -sf localhost:8000/health; then echo; exit 0; fi
+            sleep 5
+          done
+          docker logs backend
+          exit 1
 
   backend-checks:
     name: Backend sanity checks

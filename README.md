@@ -96,11 +96,18 @@ details and design notes behind this.
 ## Quickstart
 
 **1. Backend** (on your Pi, ZimaOS box, or any always-on machine on your
-home network):
+home network). With Docker:
+
+```bash
+cp backend/.env.example backend/.env   # optional: API keys can be set on the device
+docker compose up -d
+```
+
+Or with Python:
 
 ```bash
 cd backend
-cp .env.example .env   # fill in ANTHROPIC_API_KEY
+cp .env.example .env   # fill in an AI provider's API key
 pip install -r requirements.txt
 uvicorn app:app --host 0.0.0.0 --port 8000
 ```
@@ -108,7 +115,12 @@ uvicorn app:app --host 0.0.0.0 --port 8000
 Once the device is set up (below), open its address in a browser (shown on its
 Settings page) to connect a calendar and check status.
 
-**2. Firmware** (requires [ESP-IDF](https://docs.espressif.com/projects/esp-idf/en/stable/esp32s3/get-started/index.html) v5.3.x):
+**2. Firmware.** The easiest way is the browser: each
+[release](https://github.com/biggy-spoon/sticky-assistant/releases) has the
+files for the [Seeed Sticky Playground](https://www.seeedstudio.com/sticky/playground/firmware/)
+and any ESP web flasher (`manifest.json`, or `sticky-assistant-full.bin` at
+`0x0`). Erase first if another firmware is on the device. To build it yourself
+(requires [ESP-IDF](https://docs.espressif.com/projects/esp-idf/en/stable/esp32s3/get-started/index.html) v5.3.x):
 
 ```bash
 cd firmware
@@ -117,11 +129,14 @@ idf.py build
 idf.py -p <PORT> flash
 ```
 
-**3. First boot**: the device opens a WiFi network named
-`StickyAssistant-Setup`. Connect to it from your phone, a setup page should
-open automatically (or browse to `http://192.168.4.1/`); enter your real
-WiFi credentials and the backend's address
-(`http://<that-machine>:8000/converse`). The device reboots and connects.
+**3. First boot**: the screen shows the steps. The device opens a WiFi
+network named `StickyAssistant-Setup`. Connect to it from your phone, a setup
+page should open automatically (or browse to `http://192.168.4.1/`); enter
+your real WiFi credentials and the backend's address
+(`http://<that-machine>:8000/converse`). The device reboots and connects. If
+the WiFi or the backend can't be reached, home says so and what to check. To
+change the network later, hold Up and Down together for two seconds as the
+device starts.
 
 See `firmware/README.md` and `backend/README.md` for the full detail,
 including known gaps and calendar provider setup.
@@ -134,6 +149,9 @@ including known gaps and calendar provider setup.
   system (`backend/plugins/`; calendar and the todo list ship by
   default), and a SQLite-backed dashboard/history/settings.
 - `docs/ARCHITECTURE.md` — hardware details and design notes.
+- `playground/` — the entry for the Seeed Sticky Playground, and how to
+  submit a release to it. `scripts/package_release.py` and
+  `.github/workflows/release.yml` build the release files from a `v*` tag.
 
 ## Status
 

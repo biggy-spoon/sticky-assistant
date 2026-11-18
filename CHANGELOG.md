@@ -8,6 +8,24 @@ tracked under Unreleased until there's a first stable cut.
 
 ## [Unreleased]
 
+### Added
+- Releases: a `v*` tag builds a draft GitHub release with the Playground's
+  `manifest.json`, the three parts, a merged image for `0x0` and a zip
+  (`scripts/package_release.py`, `.github/workflows/release.yml`). CI packages
+  every build the same way and keeps it as an artifact.
+- An entry for the Seeed Sticky Playground (`playground/`), which passes the
+  registry's own validator, with the hardware test checklist to fill in.
+- Docker: `docker compose up -d` runs the backend, with the database, hub
+  plugins and speech model on a volume. Plugins installed from the hub go to
+  `PLUGINS_DIR` when it's set. CI builds the image and checks `/health`.
+- Setup screens: a new device shows how to join `StickyAssistant-Setup` and
+  what to enter; a configured one that has no pages yet says it couldn't join
+  the WiFi or reach the backend (retried every 30 seconds). Up and Down held
+  for two seconds at start-up reopen setup, which keeps the saved settings.
+
+### Fixed
+- The backend's Dockerfile copied only `app.py`, so the image couldn't start.
+
 ### Changed
 - The whole project is MIT, binaries included: the e-paper driver, which was
   ported from the GPLv3 `folloup-sticky`, is rewritten on the MIT SSD1677

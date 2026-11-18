@@ -1,0 +1,3 @@
+firmware/*/
+assets/*
+!assets/.gitkeep

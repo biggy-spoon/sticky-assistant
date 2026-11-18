@@ -15,12 +15,22 @@ for reference implementations.
 import importlib
 import inspect
 import logging
+import os
 import pkgutil
 from typing import Optional
 
 from .base import Plugin
 
 log = logging.getLogger("sticky-assistant.plugins")
+
+# Where plugins installed from the hub go: this directory, or PLUGINS_DIR if
+# set, which keeps them out of the code (in Docker, on the data volume, so
+# they survive the container being rebuilt). Plugins there load like the
+# built-in ones, as part of this package.
+INSTALL_DIR = os.path.abspath(os.getenv("PLUGINS_DIR") or os.path.dirname(__file__))
+if INSTALL_DIR != os.path.abspath(os.path.dirname(__file__)):
+    os.makedirs(INSTALL_DIR, exist_ok=True)
+    __path__.append(INSTALL_DIR)
 
 _plugins: dict[str, Plugin] = {}
 
