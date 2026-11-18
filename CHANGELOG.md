@@ -135,6 +135,9 @@ tracked under Unreleased until there's a first stable cut.
   browser. It adds the device's own settings (backend address, WiFi, sleep
   timeout, including never), and keeps the device awake while it's open. The
   backend no longer serves a dashboard; `/dashboard` redirects to the device.
+- The settings page picks the timezone, the AI model and the WiFi network from
+  dropdowns: every timezone the browser knows, the provider's model list, and
+  a scan the device runs (`GET /device/wifi`), each with a way to type one in.
 - A home page setting (Settings > Home page): the widgets, the assistant, or a
   plugin's page such as the calendar. The device starts on it, a short AI press
   goes back to it (and sleeps when already there), and tapping the status bar

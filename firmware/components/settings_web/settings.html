@@ -111,6 +111,8 @@
       padding: 0 12px; overflow-x: auto; scrollbar-width: none;
     }
     .tabbar::-webkit-scrollbar { display: none; }
+    .choice-row { display: flex; gap: 8px; align-items: center; }
+    .choice-row select { flex: 1; }
     .tab-btn {
       padding: 10px 14px; font-size: 13.5px; font-weight: 500; color: var(--muted);
       background: none; border: none; border-bottom: 2px solid transparent; cursor: pointer;
@@ -330,7 +332,11 @@
       </div>
       <div class="field-group">
         <label for="device-ssid">WiFi network</label>
-        <input id="device-ssid" type="text">
+        <div class="choice-row">
+          <select id="device-ssid-select"><option value="">Scanning...</option></select>
+          <button type="button" class="btn secondary small" onclick="scanWifi()">Scan again</button>
+        </div>
+        <input id="device-ssid" type="text" placeholder="Network name" style="display:none">
       </div>
       <div class="field-group">
         <label for="device-password">WiFi password</label>
@@ -383,12 +389,13 @@
       </div>
       <div class="field-group">
         <label for="ai-model">Model</label>
-        <input id="ai-model" type="text" list="ai-models">
-        <datalist id="ai-models"></datalist>
+        <select id="ai-model-select"><option value="">Loading models...</option></select>
+        <input id="ai-model" type="text" placeholder="Model id" style="display:none">
       </div>
       <div class="field-group">
         <label for="timezone">Timezone</label>
-        <input id="timezone" type="text" placeholder="e.g. America/New_York">
+        <select id="timezone-select"></select>
+        <input id="timezone" type="hidden">
         <p class="hint">For the device's clock, its calendar and the todo list's reset at midnight. Blank uses this server's timezone.</p>
       </div>
       <div class="field-group">
@@ -478,6 +485,7 @@
       document.getElementById('device-backend').value = deviceConfig.backend || '';
       document.getElementById('device-sleep').value = String(deviceConfig.sleep_minutes ?? 5);
       document.getElementById('device-ssid').value = deviceConfig.wifi_ssid || '';
+      scanWifi();
     }
 
     async function saveDeviceSettings() {
@@ -597,17 +605,49 @@
 
     let coreConfig = null;
 
+    // A dropdown backed by a text field: the field holds the value that gets
+    // saved, and shows itself only for "Other...".
+    function fillChoice(selectId, inputId, options, current, otherLabel) {
+      const select = document.getElementById(selectId);
+      const input = document.getElementById(inputId);
+      const values = options.map(o => typeof o === 'string' ? {value: o, label: o} : o);
+      if (current && !values.some(o => o.value === current)) values.unshift({value: current, label: current});
+      select.innerHTML = values.map(o => `<option value="${escapeHtml(o.value)}">${escapeHtml(o.label)}</option>`).join('')
+        + (otherLabel ? `<option value="__other__">${escapeHtml(otherLabel)}</option>` : '');
+      select.value = current || (values.length ? values[0].value : '__other__');
+      select.onchange = () => {
+        const other = select.value === '__other__';
+        if (input.type !== 'hidden') input.style.display = other ? '' : 'none';
+        input.value = other ? '' : select.value;
+        if (other) input.focus();
+      };
+      select.onchange();
+    }
+
+    async function scanWifi() {
+      const select = document.getElementById('device-ssid-select');
+      select.innerHTML = '<option value="">Scanning...</option>';
+      const result = await fetch('/device/wifi').then(r => r.json()).catch(() => ({networks: []}));
+      const networks = (result.networks || []).map(n => ({
+        value: n.ssid, label: `${n.ssid}${n.secure ? '' : ' (open)'}${n.ssid === deviceConfig.wifi_ssid ? ' (connected)' : ''}`,
+      }));
+      fillChoice('device-ssid-select', 'device-ssid', networks, deviceConfig.wifi_ssid || '', 'Other (hidden network)...');
+    }
+
+    function timezoneOptions() {
+      const zones = (Intl.supportedValuesOf ? Intl.supportedValuesOf('timeZone') : []);
+      return [{value: '', label: "This server's timezone"}, ...zones.map(z => ({value: z, label: z.replace(/_/g, ' ')}))];
+    }
+
     async function showProvider() {
       const provider = document.getElementById('ai-provider').value;
       const saved = coreConfig.ai[provider] || {};
-      document.getElementById('ai-model').value = saved.model || '';
       document.getElementById('ai-key').placeholder = saved.api_key
         ? `Saved: ${saved.api_key}` : 'Not set yet';
       document.getElementById('base-url-group').style.display = provider === 'openai' ? '' : 'none';
-      const list = document.getElementById('ai-models');
-      list.innerHTML = '';
+      document.getElementById('ai-model-select').innerHTML = '<option value="">Loading models...</option>';
       const result = await fetch(API + `/api/ai/models?provider=${provider}`).then(r => r.json()).catch(() => ({}));
-      list.innerHTML = (result.models || []).map(m => `<option value="${escapeHtml(m)}">`).join('');
+      fillChoice('ai-model-select', 'ai-model', result.models || [], saved.model || '', 'Other model id...');
     }
 
     async function loadCoreSettings() {
@@ -619,7 +659,7 @@
       select.value = config.ai_provider;
       document.getElementById('openai-base-url').value = config.openai_base_url || '';
       showProvider();
-      document.getElementById('timezone').value = config.timezone || '';
+      fillChoice('timezone-select', 'timezone', timezoneOptions(), config.timezone || '', null);
       document.getElementById('units').value = config.units || 'imperial';
       document.getElementById('device-font').value = config.device_font || 'custom';
     }

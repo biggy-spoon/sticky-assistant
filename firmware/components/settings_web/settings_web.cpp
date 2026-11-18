@@ -1,11 +1,14 @@
 #include "settings_web.h"
 
+#include <algorithm>
 #include <string>
+#include <vector>
 
 #include "cJSON.h"
 #include "esp_http_server.h"
 #include "esp_log.h"
 #include "esp_netif.h"
+#include "esp_wifi.h"
 #include "esp_system.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
@@ -144,6 +147,35 @@ esp_err_t HandlePostConfig(httpd_req_t* req) {
     return err;
 }
 
+// Nearby networks for the page's WiFi dropdown, strongest first, each name once.
+esp_err_t HandleWifiScan(httpd_req_t* req) {
+    power_service::NoteActivity();
+    wifi_scan_config_t scan = {};
+    scan.show_hidden = false;
+    cJSON* json = cJSON_CreateObject();
+    cJSON* list = cJSON_AddArrayToObject(json, "networks");
+    if (esp_wifi_scan_start(&scan, true) == ESP_OK) {  // blocks for about two seconds
+        uint16_t count = 20;
+        wifi_ap_record_t records[20];
+        if (esp_wifi_scan_get_ap_records(&count, records) == ESP_OK) {
+            std::vector<std::string> seen;
+            for (uint16_t i = 0; i < count; ++i) {  // already sorted by signal
+                const std::string ssid(reinterpret_cast<const char*>(records[i].ssid));
+                if (ssid.empty() || std::find(seen.begin(), seen.end(), ssid) != seen.end()) {
+                    continue;
+                }
+                seen.push_back(ssid);
+                cJSON* network = cJSON_CreateObject();
+                cJSON_AddStringToObject(network, "ssid", ssid.c_str());
+                cJSON_AddNumberToObject(network, "rssi", records[i].rssi);
+                cJSON_AddBoolToObject(network, "secure", records[i].authmode != WIFI_AUTH_OPEN);
+                cJSON_AddItemToArray(list, network);
+            }
+        }
+    }
+    return SendJson(req, json);
+}
+
 esp_err_t HandlePing(httpd_req_t* req) {
     power_service::NoteActivity();  // the page is open: stay awake
     return SendJson(req, cJSON_CreateObject());
@@ -166,6 +198,7 @@ esp_err_t Start() {
         {.uri = "/device/config", .method = HTTP_GET, .handler = HandleGetConfig, .user_ctx = nullptr},
         {.uri = "/device/config", .method = HTTP_POST, .handler = HandlePostConfig, .user_ctx = nullptr},
         {.uri = "/device/ping", .method = HTTP_GET, .handler = HandlePing, .user_ctx = nullptr},
+        {.uri = "/device/wifi", .method = HTTP_GET, .handler = HandleWifiScan, .user_ctx = nullptr},
     };
     for (const httpd_uri_t& route : routes) {
         httpd_register_uri_handler(server, &route);
