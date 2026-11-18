@@ -6,11 +6,10 @@ plugins shipped with the backend, alongside calendar_plugin.py.
 import logging
 from datetime import datetime
 from typing import Optional
-from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 import settings
 import storage
-from .base import DeviceView, DeviceViewItem, Plugin, SettingField
+from .base import DeviceView, DeviceViewItem, Plugin
 
 log = logging.getLogger("sticky-claude.plugins.todo")
 
@@ -47,12 +46,7 @@ _TOOLS = [
 
 
 def _start_of_today() -> datetime:
-    name = settings.get("todo_timezone", "")
-    try:
-        now = datetime.now(ZoneInfo(name)) if name else datetime.now().astimezone()
-    except (ZoneInfoNotFoundError, ValueError):
-        log.warning("Unknown todo_timezone %r, using the server's timezone", name)
-        now = datetime.now().astimezone()
+    now = datetime.now(settings.local_timezone())
     return now.replace(hour=0, minute=0, second=0, microsecond=0)
 
 
@@ -68,12 +62,6 @@ class TodoPlugin(Plugin):
     @property
     def description(self) -> str:
         return "A voice-driven todo list -- add, list, and complete items by speaking."
-
-    def settings_schema(self) -> list[SettingField]:
-        return [SettingField(
-            key="todo_timezone", label="Timezone for the daily reset",
-            placeholder="e.g. America/New_York (blank uses the server's timezone)",
-        )]
 
     def is_configured(self) -> bool:
         return True

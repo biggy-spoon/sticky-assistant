@@ -34,6 +34,16 @@ def _row_when(event: calendar_service.CalendarEvent) -> str:
     return f"{event.start.strftime('%a %b %d')}, {_clock(event.start)}"
 
 
+def _timestamp(value, tz) -> int:
+    """Unix time of an event boundary. A date (all day) means local midnight,
+    and a time with no zone is taken as local too."""
+    if not isinstance(value, datetime):
+        value = datetime(value.year, value.month, value.day)
+    if value.tzinfo is None:
+        value = value.replace(tzinfo=tz)
+    return int(value.timestamp())
+
+
 def _detail(event: calendar_service.CalendarEvent) -> str:
     if isinstance(event.start, datetime):
         lines = [event.start.strftime("%A, %B %d"), f"{_clock(event.start)} - {_clock(event.end)}"]
@@ -182,11 +192,14 @@ class CalendarPlugin(Plugin):
         except Exception:
             log.exception("Failed to load calendar events for device view")
             return None
+        tz = settings.local_timezone()
         items = [
-            DeviceViewItem(id=str(i), text=e.summary, secondary=_row_when(e), detail=_detail(e))
+            DeviceViewItem(id=str(i), text=e.summary, secondary=_row_when(e), detail=_detail(e),
+                           start_ts=_timestamp(e.start, tz), end_ts=_timestamp(e.end, tz),
+                           all_day=not isinstance(e.start, datetime))
             for i, e in enumerate(events[:_DEVICE_VIEW_MAX_EVENTS])
         ]
-        return DeviceView(view_type="list", title="Calendar", items=items)
+        return DeviceView(view_type="agenda", title="Calendar", items=items)
 
     def register_routes(self, app: FastAPI) -> None:
         @app.get("/api/plugins/calendar/google/login")

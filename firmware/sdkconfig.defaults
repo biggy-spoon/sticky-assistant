@@ -13,7 +13,13 @@ CONFIG_LV_FONT_MONTSERRAT_16=y
 CONFIG_LV_FONT_MONTSERRAT_20=y
 CONFIG_LV_FONT_MONTSERRAT_28=y
 
-# LVGL + the extra fonts push the binary past the default 1MB app
-# partition (observed ~1.23MB) -- use the larger single-app scheme
-# (1500K) instead of a from-scratch custom partition table.
-CONFIG_PARTITION_TABLE_SINGLE_APP_LARGE=y
+# The board has 32MB of flash. 16MB is the most that works without 32-bit
+# addressing, and the app gets 6MB of it for LVGL and the UI fonts.
+# partitions.csv keeps NVS where it was, so saved settings survive.
+CONFIG_ESPTOOLPY_FLASHSIZE_16MB=y
+CONFIG_PARTITION_TABLE_CUSTOM=y
+CONFIG_PARTITION_TABLE_CUSTOM_FILENAME="partitions.csv"
+
+# LVGL's heap: the largest size it allows, allocated in PSRAM rather than
+# internal RAM (see LV_MEM_POOL_ALLOC in CMakeLists.txt).
+CONFIG_LV_MEM_SIZE_KILOBYTES=128

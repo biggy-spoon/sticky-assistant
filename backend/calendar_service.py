@@ -13,7 +13,7 @@ so the dashboard can switch providers without a code change.
 import logging
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import date, datetime
 from typing import Optional
 
 import settings
@@ -27,6 +27,14 @@ class CalendarEvent:
     start: datetime
     end: datetime
     description: str = ""
+
+
+def _google_time(value: dict):
+    """An all-day event has only a "date", which must stay a date: parsed as a
+    datetime it would look like an event at midnight."""
+    if "dateTime" in value:
+        return datetime.fromisoformat(value["dateTime"])
+    return date.fromisoformat(value["date"])
 
 
 class CalendarProvider(ABC):
@@ -137,12 +145,10 @@ class GoogleCalendarProvider(CalendarProvider):
         ).execute()
         events: list[CalendarEvent] = []
         for item in response.get("items", []):
-            start_raw = item["start"].get("dateTime", item["start"].get("date"))
-            end_raw = item["end"].get("dateTime", item["end"].get("date"))
             events.append(CalendarEvent(
                 summary=item.get("summary", ""),
-                start=datetime.fromisoformat(start_raw),
-                end=datetime.fromisoformat(end_raw),
+                start=_google_time(item["start"]),
+                end=_google_time(item["end"]),
                 description=item.get("description", ""),
             ))
         return events

@@ -22,6 +22,7 @@ struct ButtonState {
     uint8_t stable_count = 0;
     int last_raw = !kActiveLevel;
     int64_t press_started_us = 0;
+    bool swallow = false;  // held since startup: its release isn't a press
 };
 
 ButtonState s_buttons[] = {
@@ -51,6 +52,12 @@ void PollOne(ButtonState* button) {
     }
 
     const bool is_active = (raw == kActiveLevel);
+    if (button->swallow) {
+        if (!is_active) {
+            button->swallow = false;
+        }
+        return;
+    }
     if (is_active && !button->pressed) {
         button->pressed = true;
         button->press_started_us = esp_timer_get_time();
@@ -91,6 +98,11 @@ esp_err_t Init() {
         if (err != ESP_OK) {
             return err;
         }
+    }
+    // A button already down now is the one that woke the board from sleep, so
+    // it shouldn't also start a recording or change page.
+    for (ButtonState& button : s_buttons) {
+        button.swallow = gpio_get_level(button.pin) == kActiveLevel;
     }
 
     if (s_task == nullptr) {

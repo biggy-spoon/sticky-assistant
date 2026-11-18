@@ -5,6 +5,11 @@
 // also licensed under the GNU GPLv3 (see LICENSE in this directory), unlike
 // the rest of this repository (MIT). The original author's copyright is
 // retained in spirit: this is a port, not independent work.
+//
+// The partial refresh, power-off and sleep sequences are adapted from the
+// MIT-licensed SSD1677 driver by limengdu that Sticky OS vendors
+// (https://github.com/Sticky-OS/sticky-os, src/sticky_drivers/ssd1677.c,
+// Copyright (c) 2026 limengdu).
 #include "epaper_display.h"
 
 #include <algorithm>
@@ -56,8 +61,22 @@ constexpr uint8_t kTemperatureSelectInternal = 0x80;
 constexpr uint8_t kDisplayUpdateCtrl1Full[] = {0x40, 0x00};
 constexpr uint8_t kDisplayUpdateCtrl2Full = 0xF7;
 
+// Partial refresh: the controller's own fast waveform (display mode 2), and it
+// leaves the analog power on so back-to-back partial refreshes skip ramping it
+// up. The border waveform holds the border still instead of cycling it.
+constexpr uint8_t kDisplayUpdateCtrl2Partial = 0xFC;
+constexpr uint8_t kDisplayUpdateCtrl2PowerOff = 0x83;
+constexpr uint8_t kBorderWaveformPartialValue = 0x80;
+constexpr uint8_t kCmdDeepSleep = 0x10;
+constexpr uint8_t kDeepSleepMode2 = 0x03;
+
 spi_device_handle_t s_spi = nullptr;
 uint8_t* s_framebuffer = nullptr;  // 1bpp, BOARD_EPD_BUFFER_LEN bytes, 1 = white
+// What the panel is showing, for a partial refresh's "previous" plane. Only
+// valid after a full refresh since startup.
+uint8_t* s_previous = nullptr;
+bool s_baseline_valid = false;
+bool s_analog_on = false;  // left on by a partial refresh
 
 void SetDc(bool data) { gpio_set_level(BOARD_EPD_DC_PIN, data ? 1 : 0); }
 
@@ -236,6 +255,76 @@ esp_err_t TurnOnDisplay() {
     return ESP_OK;
 }
 
+// Turns off the analog power a partial refresh leaves on. Done before a reset
+// or sleep, which would otherwise cut it uncleanly.
+esp_err_t PowerOffIfOn() {
+    if (!s_analog_on) {
+        return ESP_OK;
+    }
+    esp_err_t err = SendCommandWithData(kCmdDisplayUpdateControl2, &kDisplayUpdateCtrl2PowerOff, 1);
+    if (err != ESP_OK) return err;
+    err = SendCommand(kCmdMasterActivate);
+    if (err != ESP_OK) return err;
+    WaitWhileBusy();
+    s_analog_on = false;
+    return ESP_OK;
+}
+
+// As InitFull, but without the software reset, and with the partial border
+// waveform. The window and data entry mode match InitFull's, so the
+// framebuffer maps onto the panel the same way.
+esp_err_t InitPartial() {
+    esp_err_t err = PowerOffIfOn();
+    if (err != ESP_OK) return err;
+    HardwareReset();
+    WaitWhileBusy();
+
+    const uint16_t rows_minus_one = BOARD_EPD_HEIGHT - 1;
+    const uint8_t driver_output[] = {
+        static_cast<uint8_t>(rows_minus_one & 0xFF),
+        static_cast<uint8_t>(rows_minus_one >> 8),
+        0x02,
+    };
+    err = SendCommandWithData(kCmdTemperatureSensorSelect, &kTemperatureSelectInternal, 1);
+    if (err != ESP_OK) return err;
+    err = SendCommandWithData(kCmdBorderWaveformFull, &kBorderWaveformPartialValue, 1);
+    if (err != ESP_OK) return err;
+    err = SendCommandWithData(kCmdBoosterSoftStart, kBoosterSoftStart, sizeof(kBoosterSoftStart));
+    if (err != ESP_OK) return err;
+    err = SendCommandWithData(kCmdDriverOutputControl, driver_output, sizeof(driver_output));
+    if (err != ESP_OK) return err;
+    err = SendCommandWithData(kCmdDataEntryMode, &kDataEntryModeFull, 1);
+    if (err != ESP_OK) return err;
+    err = SetWindow(0, BOARD_EPD_HEIGHT - 1, BOARD_EPD_WIDTH - 1, 0);
+    if (err != ESP_OK) return err;
+    return SetCursor(0, BOARD_EPD_HEIGHT - 1);
+}
+
+esp_err_t PartialRefresh() {
+    esp_err_t err = InitPartial();
+    if (err != ESP_OK) {
+        ESP_LOGE(kTag, "InitPartial failed: %s", esp_err_to_name(err));
+        return err;
+    }
+    // The controller drives only the pixels that differ between the planes.
+    err = SendCommand(kCmdWriteRamOld);
+    if (err != ESP_OK) return err;
+    err = SendData(s_previous, BOARD_EPD_BUFFER_LEN);
+    if (err != ESP_OK) return err;
+    err = SendCommand(kCmdWriteRamNew);
+    if (err != ESP_OK) return err;
+    err = SendData(s_framebuffer, BOARD_EPD_BUFFER_LEN);
+    if (err != ESP_OK) return err;
+
+    err = SendCommandWithData(kCmdDisplayUpdateControl2, &kDisplayUpdateCtrl2Partial, 1);
+    if (err != ESP_OK) return err;
+    err = SendCommand(kCmdMasterActivate);
+    if (err != ESP_OK) return err;
+    WaitWhileBusy();
+    s_analog_on = true;
+    return ESP_OK;
+}
+
 }  // namespace
 
 esp_err_t Init() {
@@ -257,8 +346,10 @@ esp_err_t Init() {
     if (s_framebuffer == nullptr) {
         s_framebuffer = static_cast<uint8_t*>(heap_caps_malloc(BOARD_EPD_BUFFER_LEN,
                                                                 MALLOC_CAP_SPIRAM));
-        if (s_framebuffer == nullptr) {
-            ESP_LOGE(kTag, "failed to allocate %d byte framebuffer", BOARD_EPD_BUFFER_LEN);
+        s_previous = static_cast<uint8_t*>(heap_caps_malloc(BOARD_EPD_BUFFER_LEN,
+                                                             MALLOC_CAP_SPIRAM));
+        if (s_framebuffer == nullptr || s_previous == nullptr) {
+            ESP_LOGE(kTag, "failed to allocate %d byte framebuffers", BOARD_EPD_BUFFER_LEN);
             return ESP_ERR_NO_MEM;
         }
     }
@@ -294,7 +385,9 @@ esp_err_t FullRefresh() {
         return ESP_ERR_INVALID_STATE;
     }
 
-    esp_err_t err = InitFull();
+    esp_err_t err = PowerOffIfOn();
+    if (err != ESP_OK) return err;
+    err = InitFull();
     if (err != ESP_OK) {
         ESP_LOGE(kTag, "InitFull failed: %s", esp_err_to_name(err));
         return err;
@@ -312,7 +405,40 @@ esp_err_t FullRefresh() {
     err = SendData(s_framebuffer, BOARD_EPD_BUFFER_LEN);
     if (err != ESP_OK) return err;
 
-    return TurnOnDisplay();
+    err = TurnOnDisplay();
+    if (err == ESP_OK) {
+        memcpy(s_previous, s_framebuffer, BOARD_EPD_BUFFER_LEN);
+        s_baseline_valid = true;
+    }
+    return err;
+}
+
+esp_err_t Refresh(bool full) {
+    if (s_framebuffer == nullptr || s_spi == nullptr) {
+        return ESP_ERR_INVALID_STATE;
+    }
+    if (full || !s_baseline_valid) {
+        return FullRefresh();
+    }
+    const esp_err_t err = PartialRefresh();
+    if (err == ESP_OK) {
+        memcpy(s_previous, s_framebuffer, BOARD_EPD_BUFFER_LEN);
+    } else {
+        s_baseline_valid = false;  // unknown what's on the glass now
+    }
+    return err;
+}
+
+esp_err_t Sleep() {
+    if (s_spi == nullptr) {
+        return ESP_ERR_INVALID_STATE;
+    }
+    esp_err_t err = PowerOffIfOn();
+    if (err != ESP_OK) return err;
+    err = SendCommandWithData(kCmdDeepSleep, &kDeepSleepMode2, 1);
+    vTaskDelay(pdMS_TO_TICKS(100));
+    s_baseline_valid = false;  // waking the controller needs a reset and a full refresh
+    return err;
 }
 
 }  // namespace epaper_display

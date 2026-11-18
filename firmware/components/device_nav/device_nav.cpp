@@ -2,11 +2,13 @@
 
 #include <algorithm>
 #include <cstring>
+#include <ctime>
 #include <string>
 #include <utility>
 #include <vector>
 
 #include "cJSON.h"
+#include "esp_attr.h"
 #include "esp_http_client.h"
 #include "esp_log.h"
 #include "esp_timer.h"
@@ -14,6 +16,7 @@
 #include "freertos/queue.h"
 #include "freertos/semphr.h"
 #include "freertos/task.h"
+#include "freertos/timers.h"
 #include "settings_service.h"
 #include "ui.h"
 
@@ -23,10 +26,16 @@ namespace {
 constexpr const char* kTag = "device_nav";
 constexpr int kFetchTimeoutMs = 15000;  // a CalDAV lookup behind this can take several seconds
 constexpr int kActionTimeoutMs = 5000;
-constexpr int64_t kRefreshMinIntervalUs = 30 * 1000 * 1000;  // for page changes in quick succession
+constexpr int64_t kRefreshMinIntervalUs = 30LL * 1000 * 1000;  // for page changes in quick succession
+constexpr int64_t kBackgroundRefreshUs = 10LL * 60 * 1000 * 1000;
+constexpr uint32_t kRedrawPeriodMs = 5 * 60 * 1000;  // keeps "now" and "next" current
 constexpr uint32_t kTaskStackBytes = 6144;
 constexpr size_t kMaxIdLen = 40;
 constexpr size_t kQueueLength = 8;
+
+constexpr int kHomePage = 0;
+constexpr int kClaudePage = 1;
+constexpr int kFirstViewPage = 2;
 
 struct Item {
     std::string id;
@@ -35,6 +44,9 @@ struct Item {
     std::string detail;
     bool checkable = false;
     bool checked = false;
+    int64_t start_ts = 0;
+    int64_t end_ts = 0;
+    bool all_day = false;
 
     bool operator==(const Item&) const = default;
 };
@@ -49,7 +61,13 @@ struct View {
     bool operator==(const View&) const = default;
 };
 
-enum class CommandType { kRefresh, kPostAction };
+struct Clock {
+    bool known = false;
+    int64_t now = 0;
+    int utc_offset = 0;
+};
+
+enum class CommandType { kRefresh, kPostAction, kRedraw };
 
 struct Command {
     CommandType type;
@@ -58,18 +76,28 @@ struct Command {
     char item_id[kMaxIdLen] = {};
 };
 
+// Survives deep sleep (not a power cut): where to come back to, and the last
+// conversation for the Claude page.
+RTC_DATA_ATTR char s_rtc_page[kMaxIdLen];
+RTC_DATA_ATTR char s_rtc_transcript[512];
+RTC_DATA_ATTR char s_rtc_reply[1536];
+
 QueueHandle_t s_queue = nullptr;
 TaskHandle_t s_task = nullptr;
+TimerHandle_t s_redraw_timer = nullptr;
 
 // s_state_mutex guards all of this. Buttons, touch and DeviceNavTask all change it.
 SemaphoreHandle_t s_state_mutex = nullptr;
 std::vector<View> s_views;
 bool s_has_fetched = false;  // distinguishes "fetched, turned out empty" from "never fetched"
-int s_view_index = -1;       // -1 = home
-int s_detail_row = -1;       // row whose details are open, -1 = none
+int s_page = kHomePage;
+int s_detail_row = -1;  // row whose details are open, -1 = none
+std::string s_transcript;
+std::string s_reply;
+std::string s_resume_page;  // a page id to open once the views arrive
 bool s_wifi_connected = false;
 bool s_input_paused = false;
-bool s_home_has_message = false;  // a reply or error is on screen at home
+bool s_transient_shown = false;  // an error or loading screen is up
 bool s_refresh_in_flight = false;
 int s_pending_nav = 0;        // page change waiting on the first fetch
 bool s_force_render = false;  // the next fetch has to draw, whatever it returns
@@ -82,6 +110,33 @@ void Unlock() { xSemaphoreGive(s_state_mutex); }
 void CopyBounded(char* dest, size_t dest_len, const std::string& src) {
     strncpy(dest, src.c_str(), dest_len - 1);
     dest[dest_len - 1] = '\0';
+}
+
+int TotalPages() { return kFirstViewPage + static_cast<int>(s_views.size()); }
+
+const View* CurrentView() {
+    const int index = s_page - kFirstViewPage;
+    return index >= 0 && index < static_cast<int>(s_views.size()) ? &s_views[index] : nullptr;
+}
+
+std::string PageId() {
+    if (s_page == kHomePage) return "home";
+    if (s_page == kClaudePage) return "claude";
+    const View* view = CurrentView();
+    return view != nullptr ? view->plugin_id : "home";
+}
+
+// Sets the page from an id saved by PageId(). Unknown ids leave it at home.
+void SetPageById(const std::string& id) {
+    s_page = kHomePage;
+    if (id == "claude") {
+        s_page = kClaudePage;
+    }
+    for (size_t i = 0; i < s_views.size(); ++i) {
+        if (s_views[i].plugin_id == id) {
+            s_page = kFirstViewPage + static_cast<int>(i);
+        }
+    }
 }
 
 std::string BaseUrl() {
@@ -115,9 +170,14 @@ std::string JsonString(const cJSON* object, const char* key) {
     return cJSON_IsString(field) ? field->valuestring : "";
 }
 
+int64_t JsonInt(const cJSON* object, const char* key) {
+    const cJSON* field = cJSON_GetObjectItemCaseSensitive(object, key);
+    return cJSON_IsNumber(field) ? static_cast<int64_t>(field->valuedouble) : 0;
+}
+
 // Fetches and parses GET /api/device/views. Only ever called from
 // DeviceNavTask -- this is a blocking network call.
-bool FetchViews(std::vector<View>* out_views) {
+bool FetchViews(std::vector<View>* out_views, Clock* out_clock) {
     const std::string url = BaseUrl() + "/api/device/views";
     ResponseBuffer response_buffer;
 
@@ -138,8 +198,7 @@ bool FetchViews(std::vector<View>* out_views) {
     esp_http_client_cleanup(client);
 
     if (err != ESP_OK || status < 200 || status >= 300) {
-        ESP_LOGW(kTag, "GET /api/device/views failed: err=%s http=%d", esp_err_to_name(err),
-                 status);
+        ESP_LOGW(kTag, "GET /api/device/views failed: err=%s http=%d", esp_err_to_name(err), status);
         return false;
     }
 
@@ -150,18 +209,16 @@ bool FetchViews(std::vector<View>* out_views) {
     }
 
     std::vector<View> views;
-    cJSON* views_json = cJSON_GetObjectItemCaseSensitive(root, "views");
     cJSON* view_json = nullptr;
-    cJSON_ArrayForEach(view_json, views_json) {
+    cJSON_ArrayForEach(view_json, cJSON_GetObjectItemCaseSensitive(root, "views")) {
         View view;
         view.plugin_id = JsonString(view_json, "plugin_id");
         view.view_type = JsonString(view_json, "view_type");
         view.title = JsonString(view_json, "title");
         view.body = JsonString(view_json, "body");
 
-        cJSON* items_json = cJSON_GetObjectItemCaseSensitive(view_json, "items");
         cJSON* item_json = nullptr;
-        cJSON_ArrayForEach(item_json, items_json) {
+        cJSON_ArrayForEach(item_json, cJSON_GetObjectItemCaseSensitive(view_json, "items")) {
             Item item;
             item.id = JsonString(item_json, "id");
             item.text = JsonString(item_json, "text");
@@ -170,9 +227,19 @@ bool FetchViews(std::vector<View>* out_views) {
             const cJSON* checked = cJSON_GetObjectItemCaseSensitive(item_json, "checked");
             item.checkable = cJSON_IsBool(checked);
             item.checked = item.checkable && cJSON_IsTrue(checked);
+            item.start_ts = JsonInt(item_json, "start_ts");
+            item.end_ts = JsonInt(item_json, "end_ts");
+            item.all_day = cJSON_IsTrue(cJSON_GetObjectItemCaseSensitive(item_json, "all_day"));
             view.items.push_back(std::move(item));
         }
         views.push_back(std::move(view));
+    }
+
+    const cJSON* clock = cJSON_GetObjectItemCaseSensitive(root, "clock");
+    if (cJSON_IsObject(clock) && JsonInt(clock, "now") > 0) {
+        out_clock->known = true;
+        out_clock->now = JsonInt(clock, "now");
+        out_clock->utc_offset = static_cast<int>(JsonInt(clock, "utc_offset"));
     }
     cJSON_Delete(root);
 
@@ -219,31 +286,94 @@ bool PostDeviceAction(const char* plugin_id, const char* item_id, bool checked) 
     return ok;
 }
 
-// Caller must hold the lock, as for every *Locked function here.
-void RenderCurrentLocked(bool keep_scroll) {
-    const int total = static_cast<int>(s_views.size()) + 1;
-    if (s_view_index < 0 || s_view_index >= static_cast<int>(s_views.size())) {
-        ui::ShowIdle(s_wifi_connected, s_has_fetched ? total : 0);
-        return;
-    }
-    const View& view = s_views[s_view_index];
-    const ui::PagePos page = {s_view_index + 1, total};
-    if (s_detail_row >= 0 && s_detail_row < static_cast<int>(view.items.size())) {
-        const Item& item = view.items[s_detail_row];
-        ui::ShowDetail(item.text, item.detail, page);
-        return;
-    }
-    std::vector<ui::DeviceViewRow> rows;
-    rows.reserve(view.items.size());
+ui::TileIcon IconFor(const View& view) {
+    if (view.view_type == "agenda") return ui::TileIcon::kCalendar;
     for (const Item& item : view.items) {
-        ui::DeviceViewRow row;
-        row.text = item.text;
-        row.secondary = item.secondary;
-        row.checkable = item.checkable;
-        row.checked = item.checked;
-        rows.push_back(std::move(row));
+        if (item.checkable) return ui::TileIcon::kChecklist;
     }
-    ui::ShowDeviceView(view.title, rows, page, keep_scroll);
+    if (view.plugin_id == "todo") return ui::TileIcon::kChecklist;
+    return ui::TileIcon::kGeneric;
+}
+
+int OpenCount(const View& view) {
+    int open = 0;
+    for (const Item& item : view.items) {
+        open += item.checkable && !item.checked ? 1 : 0;
+    }
+    return open;
+}
+
+ui::HomeInfo BuildHome() {
+    ui::HomeInfo info;
+    info.wifi_connected = s_wifi_connected;
+    info.tiles.push_back({"Claude", ui::TileIcon::kClaude, 0});
+    const int64_t now = static_cast<int64_t>(time(nullptr));
+    for (const View& view : s_views) {
+        const ui::TileIcon icon = IconFor(view);
+        const int badge = icon == ui::TileIcon::kChecklist ? OpenCount(view) : 0;
+        info.tiles.push_back({view.title, icon, badge});
+        if (icon == ui::TileIcon::kChecklist && info.open_todos < 0) {
+            info.open_todos = OpenCount(view);
+        }
+        if (view.view_type == "agenda" && !info.has_calendar) {
+            info.has_calendar = true;
+            for (const Item& item : view.items) {
+                if (item.end_ts > now) {
+                    info.has_next_event = true;
+                    info.next_title = item.text;
+                    info.next_start = item.start_ts;
+                    info.next_all_day = item.all_day;
+                    break;
+                }
+            }
+        }
+    }
+    return info;
+}
+
+// Draws the current page. Caller must hold the lock, as for every *Locked
+// function here.
+void RenderCurrentLocked(bool keep_scroll) {
+    s_transient_shown = false;
+    const ui::PagePos page = {s_page, TotalPages()};
+    if (s_page == kHomePage) {
+        ui::ShowHome(BuildHome(), page);
+        return;
+    }
+    if (s_page == kClaudePage) {
+        ui::ShowClaude(s_transcript, s_reply, page);
+        return;
+    }
+    const View* view = CurrentView();
+    if (view == nullptr) {
+        s_page = kHomePage;
+        ui::ShowHome(BuildHome(), {kHomePage, TotalPages()});
+        return;
+    }
+    if (s_detail_row >= 0 && s_detail_row < static_cast<int>(view->items.size())) {
+        const Item& item = view->items[s_detail_row];
+        ui::ShowDetail(item.text, item.detail, page, true);
+        return;
+    }
+    if (view->view_type == "text") {
+        ui::ShowDetail(view->title, view->body, page, false);
+        return;
+    }
+    if (view->view_type == "agenda") {
+        std::vector<ui::AgendaItem> items;
+        items.reserve(view->items.size());
+        for (const Item& item : view->items) {
+            items.push_back({item.text, item.start_ts, item.end_ts, item.all_day, !item.detail.empty()});
+        }
+        ui::ShowAgenda(view->title, items, page, keep_scroll);
+        return;
+    }
+    std::vector<ui::ListRow> rows;
+    rows.reserve(view->items.size());
+    for (const Item& item : view->items) {
+        rows.push_back({item.text, item.secondary, item.checkable, item.checked, !item.detail.empty()});
+    }
+    ui::ShowList(view->title, rows, page, keep_scroll);
 }
 
 void EnqueueRefreshLocked() {
@@ -260,9 +390,8 @@ void EnqueueRefreshLocked() {
 }
 
 void MovePageLocked(int direction) {
-    const int total = static_cast<int>(s_views.size()) + 1;
-    const int page = (s_view_index + 1 + direction + total) % total;
-    s_view_index = page - 1;
+    const int total = TotalPages();
+    s_page = (s_page + direction + total) % total;
     s_detail_row = -1;
 }
 
@@ -283,36 +412,42 @@ void ToggleRowLocked(View* view, int row) {
 // Swaps in freshly fetched views, keeping the current plugin's page if it still
 // exists. Returns whether anything on the current screen changed.
 bool ApplyViewsLocked(std::vector<View> views) {
-    int new_index = -1;
-    bool current_changed = false;
-    if (s_view_index >= 0 && s_view_index < static_cast<int>(s_views.size())) {
-        const View& current = s_views[s_view_index];
-        for (size_t i = 0; i < views.size(); ++i) {
-            if (views[i].plugin_id == current.plugin_id) {
-                new_index = static_cast<int>(i);
-                break;
-            }
+    const View* current = CurrentView();
+    const std::string current_id = current != nullptr ? current->plugin_id : "";
+    bool changed = !s_has_fetched || views.size() != s_views.size();
+    if (current != nullptr) {
+        auto found = std::find_if(views.begin(), views.end(),
+                                  [&](const View& view) { return view.plugin_id == current_id; });
+        if (found == views.end() || !(*found == *current)) {
+            changed = true;
+            s_detail_row = -1;  // the row it was showing may no longer exist
         }
-        current_changed = new_index < 0 || !(views[new_index] == current);
+    } else if (s_page == kHomePage) {
+        changed = changed || views != s_views;  // the tiles and "next" come from every view
     }
-    const bool count_changed = !s_has_fetched || views.size() != s_views.size();
 
     s_views = std::move(views);
     s_has_fetched = true;
-    s_view_index = new_index;
-    if (current_changed) {
-        s_detail_row = -1;  // the row it was showing may no longer exist
+    if (!current_id.empty()) {
+        SetPageById(current_id);
     }
-    return current_changed || count_changed;
+    return changed;
 }
 
 void HandleRefresh() {
     std::vector<View> views;
-    const bool ok = FetchViews(&views);
+    Clock clock;
+    const bool ok = FetchViews(&views, &clock);
+    if (clock.known) {
+        ui::SetClock(clock.now, clock.utc_offset);
+    }
 
     Lock();
     s_refresh_in_flight = false;
-    bool render = s_force_render;
+    // Forced: something (boot, or Loading after a page change) waits on this
+    // fetch and has to be replaced. Otherwise an error message stays up.
+    const bool forced = s_force_render;
+    bool render = forced;
     s_force_render = false;
     const int pending_nav = s_pending_nav;
     s_pending_nav = 0;
@@ -326,17 +461,24 @@ void HandleRefresh() {
         }
     }
     bool keep_scroll = true;
+    if (!s_resume_page.empty()) {
+        SetPageById(s_resume_page);
+        s_resume_page.clear();
+        keep_scroll = false;
+        render = true;
+    }
     if (pending_nav != 0) {
         MovePageLocked(pending_nav);
         keep_scroll = false;
         render = true;
     }
-    const bool covering_message = s_view_index < 0 && s_home_has_message;
-    if (render && !s_input_paused && !covering_message) {
+    if (render && !s_input_paused && (forced || !s_transient_shown)) {
         RenderCurrentLocked(keep_scroll);
     }
     Unlock();
 }
+
+void HandleRedraw();
 
 void HandlePostAction(const Command& command) {
     const bool ok = PostDeviceAction(command.plugin_id, command.item_id, command.checked);
@@ -361,8 +503,39 @@ void DeviceNavTask(void*) {
             case CommandType::kPostAction:
                 HandlePostAction(command);
                 break;
+            case CommandType::kRedraw:
+                HandleRedraw();
+                break;
         }
     }
+}
+
+// Every few minutes: redraw home or the calendar, so "now" and "next" don't go
+// stale, and fetch fresh views now and then. Runs on DeviceNavTask.
+void HandleRedraw() {
+    Lock();
+    if (!s_input_paused && !s_transient_shown && s_detail_row < 0) {
+        const View* view = CurrentView();
+        if (s_page == kHomePage || (view != nullptr && view->view_type == "agenda")) {
+            RenderCurrentLocked(true);
+        }
+        if (s_wifi_connected && esp_timer_get_time() - s_last_fetch_us >= kBackgroundRefreshUs) {
+            EnqueueRefreshLocked();
+        }
+    }
+    Unlock();
+}
+
+// The timer task's stack is small, so this only hands the work on.
+void RedrawTimerCallback(TimerHandle_t) {
+    Command command = {};
+    command.type = CommandType::kRedraw;
+    xQueueSend(s_queue, &command, 0);
+}
+
+void SaveConversation() {
+    CopyBounded(s_rtc_transcript, sizeof(s_rtc_transcript), s_transcript);
+    CopyBounded(s_rtc_reply, sizeof(s_rtc_reply), s_reply);
 }
 
 }  // namespace
@@ -376,34 +549,38 @@ esp_err_t Init() {
     if (s_queue == nullptr) {
         return ESP_ERR_NO_MEM;
     }
-    const BaseType_t created =
-        xTaskCreate(DeviceNavTask, "device_nav", kTaskStackBytes, nullptr, 4, &s_task);
-    if (created != pdPASS) {
+    if (xTaskCreate(DeviceNavTask, "device_nav", kTaskStackBytes, nullptr, 4, &s_task) != pdPASS) {
         s_task = nullptr;
+        return ESP_ERR_NO_MEM;
+    }
+    s_redraw_timer = xTimerCreate("nav_redraw", pdMS_TO_TICKS(kRedrawPeriodMs), pdTRUE, nullptr,
+                                  &RedrawTimerCallback);
+    if (s_redraw_timer == nullptr || xTimerStart(s_redraw_timer, 0) != pdPASS) {
         return ESP_ERR_NO_MEM;
     }
     ESP_LOGI(kTag, "initialized");
     return ESP_OK;
 }
 
-void SetWifiConnected(bool connected) {
+void Start(bool wifi_connected, bool woke_from_sleep) {
     Lock();
-    s_wifi_connected = connected;
+    s_wifi_connected = wifi_connected;
+    if (woke_from_sleep) {
+        s_transcript = s_rtc_transcript;
+        s_reply = s_rtc_reply;
+        s_resume_page = s_rtc_page;
+    } else {
+        s_rtc_page[0] = s_rtc_transcript[0] = s_rtc_reply[0] = '\0';
+    }
+    if (wifi_connected) {
+        s_force_render = true;
+        EnqueueRefreshLocked();
+    } else {
+        SetPageById(s_resume_page);  // only home and Claude exist without views
+        s_resume_page.clear();
+        RenderCurrentLocked(false);
+    }
     Unlock();
-}
-
-void Preload() {
-    Lock();
-    s_force_render = true;
-    EnqueueRefreshLocked();
-    Unlock();
-}
-
-int KnownPluginViewCount() {
-    Lock();
-    const int count = s_has_fetched ? static_cast<int>(s_views.size()) : -1;
-    Unlock();
-    return count;
 }
 
 void PauseInput() {
@@ -420,20 +597,35 @@ void ResumeInput() {
     Unlock();
 }
 
-void ResetToHome() {
+void BeginConversation() {
     Lock();
-    s_view_index = -1;
     s_detail_row = -1;
     Unlock();
 }
 
-void FinishConversation() {
+void FinishConversation(const std::string& transcript, const std::string& reply) {
     Lock();
     s_input_paused = false;
-    s_home_has_message = true;
-    s_view_index = -1;
+    s_transcript = transcript;
+    s_reply = reply;
+    SaveConversation();
+    s_page = kClaudePage;
     s_detail_row = -1;
-    EnqueueRefreshLocked();
+    RenderCurrentLocked(false);
+    s_last_fetch_us = 0;
+    if (s_wifi_connected) {
+        EnqueueRefreshLocked();  // Claude may have changed the calendar or todos
+    }
+    Unlock();
+}
+
+void FinishConversationWithError(const std::string& message) {
+    Lock();
+    s_input_paused = false;
+    s_page = kClaudePage;
+    s_detail_row = -1;
+    s_transient_shown = true;
+    ui::ShowError(message);
     Unlock();
 }
 
@@ -443,11 +635,10 @@ void Navigate(int direction) {
         Unlock();
         return;
     }
-    s_home_has_message = false;
-
-    if (!s_has_fetched) {
+    if (!s_has_fetched && s_wifi_connected) {
         if (s_pending_nav == 0) {
             ui::ShowLoading();
+            s_transient_shown = true;
         }
         s_pending_nav = direction;
         s_force_render = true;  // Loading has to be replaced even if the fetch fails
@@ -457,8 +648,8 @@ void Navigate(int direction) {
     }
 
     MovePageLocked(direction);
-    RenderCurrentLocked(/*keep_scroll=*/false);
-    if (esp_timer_get_time() - s_last_fetch_us >= kRefreshMinIntervalUs) {
+    RenderCurrentLocked(false);
+    if (s_wifi_connected && esp_timer_get_time() - s_last_fetch_us >= kRefreshMinIntervalUs) {
         EnqueueRefreshLocked();
     }
     Unlock();
@@ -466,7 +657,7 @@ void Navigate(int direction) {
 
 void OnScroll(int direction) {
     Lock();
-    if (!s_input_paused && s_view_index >= 0) {
+    if (!s_input_paused && s_page != kHomePage) {
         ui::Scroll(direction);
     }
     Unlock();
@@ -474,41 +665,61 @@ void OnScroll(int direction) {
 
 void OnTap(int x, int y) {
     Lock();
-    if (s_input_paused || s_view_index < 0 || ui::IsBusy()) {
+    if (s_input_paused || ui::IsBusy()) {
         Unlock();
         return;
     }
-    if (s_detail_row >= 0) {
-        s_detail_row = -1;
-        RenderCurrentLocked(/*keep_scroll=*/true);
-        Unlock();
-        return;
-    }
-
-    View& view = s_views[s_view_index];
-    const int row = ui::HitTestDeviceViewRow(x, y);
-    if (row < 0 || row >= static_cast<int>(view.items.size())) {
-        Unlock();
-        return;
-    }
-
-    const Item& item = view.items[row];
-    if (item.checkable) {
-        Command command = {};
-        command.type = CommandType::kPostAction;
-        command.checked = !item.checked;
-        CopyBounded(command.plugin_id, sizeof(command.plugin_id), view.plugin_id);
-        CopyBounded(command.item_id, sizeof(command.item_id), item.id);
-        if (xQueueSend(s_queue, &command, 0) == pdTRUE) {
-            ++s_posts_pending;
-            ToggleRowLocked(&view, row);
-            RenderCurrentLocked(/*keep_scroll=*/true);
-        } else {
-            ESP_LOGW(kTag, "queue full, tap dropped");
+    const ui::Hit hit = ui::HitTest(x, y);
+    switch (hit.kind) {
+        case ui::HitKind::kStatusBar:
+            if (s_page != kHomePage || s_transient_shown) {
+                s_page = kHomePage;
+                s_detail_row = -1;
+                RenderCurrentLocked(false);
+            }
+            break;
+        case ui::HitKind::kTile:
+            if (hit.index >= 0 && hit.index + 1 < TotalPages()) {
+                s_page = hit.index + 1;  // tile 0 is Claude, page 1
+                s_detail_row = -1;
+                RenderCurrentLocked(false);
+            }
+            break;
+        case ui::HitKind::kBody:
+            if (s_detail_row >= 0) {
+                s_detail_row = -1;
+                RenderCurrentLocked(true);
+            }
+            break;
+        case ui::HitKind::kRow: {
+            const int view_index = s_page - kFirstViewPage;
+            if (view_index < 0 || view_index >= static_cast<int>(s_views.size()) ||
+                hit.index < 0 || hit.index >= static_cast<int>(s_views[view_index].items.size())) {
+                break;
+            }
+            View& view = s_views[view_index];
+            const Item& item = view.items[hit.index];
+            if (item.checkable) {
+                Command command = {};
+                command.type = CommandType::kPostAction;
+                command.checked = !item.checked;
+                CopyBounded(command.plugin_id, sizeof(command.plugin_id), view.plugin_id);
+                CopyBounded(command.item_id, sizeof(command.item_id), item.id);
+                if (xQueueSend(s_queue, &command, 0) == pdTRUE) {
+                    ++s_posts_pending;
+                    ToggleRowLocked(&view, hit.index);
+                    RenderCurrentLocked(true);
+                } else {
+                    ESP_LOGW(kTag, "queue full, tap dropped");
+                }
+            } else if (!item.detail.empty()) {
+                s_detail_row = hit.index;
+                RenderCurrentLocked(true);
+            }
+            break;
         }
-    } else if (!item.detail.empty()) {
-        s_detail_row = row;
-        RenderCurrentLocked(/*keep_scroll=*/true);
+        case ui::HitKind::kNone:
+            break;
     }
     Unlock();
 }
@@ -517,12 +728,28 @@ void OnBack() {
     Lock();
     if (s_detail_row >= 0) {
         s_detail_row = -1;
-        RenderCurrentLocked(/*keep_scroll=*/true);
-    } else {
-        s_view_index = -1;
-        s_home_has_message = false;
-        RenderCurrentLocked(/*keep_scroll=*/false);
+        RenderCurrentLocked(true);
+    } else if (s_page != kHomePage || s_transient_shown) {
+        s_page = kHomePage;
+        RenderCurrentLocked(false);
     }
+    Unlock();
+}
+
+bool CanSleep() {
+    Lock();
+    const bool can = !s_input_paused && !s_refresh_in_flight && s_posts_pending == 0;
+    Unlock();
+    return can;
+}
+
+void PrepareForSleep() {
+    Lock();
+    s_input_paused = true;
+    CopyBounded(s_rtc_page, sizeof(s_rtc_page), PageId());
+    SaveConversation();
+    ui::SetSleeping(true);
+    RenderCurrentLocked(true);
     Unlock();
 }
 

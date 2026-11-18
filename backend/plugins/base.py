@@ -54,6 +54,11 @@ class DeviceViewItem:
     checked: Optional[bool] = None
     secondary: str = ""  # optional smaller second line, e.g. an event's date
     detail: str = ""  # optional full text; tapping the row opens it on its own screen
+    # For view_type "agenda": when the item happens, as Unix timestamps. An
+    # all-day item's start is local midnight of its first day.
+    start_ts: int = 0
+    end_ts: int = 0
+    all_day: bool = False
 
 
 @dataclass
@@ -67,7 +72,7 @@ class DeviceView:
     plugin hub) can describe a screen but never execute code on the
     device.
     """
-    view_type: str  # "text" | "list"
+    view_type: str  # "text" | "list" | "agenda" (a list of timed items, grouped by day)
     title: str
     body: Optional[str] = None                    # view_type == "text"
     items: Optional[list[DeviceViewItem]] = None   # view_type == "list"

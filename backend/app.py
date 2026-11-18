@@ -11,7 +11,9 @@ view over a small JSON API.
 import io
 import logging
 import os
+import time
 from datetime import datetime, timezone
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 import anthropic
 from anthropic import Anthropic
@@ -232,6 +234,7 @@ def api_get_settings() -> dict:
     return {
         "anthropic_api_key": redacted["anthropic_api_key"],
         "claude_model": settings.get_claude_model(),
+        "timezone": settings.get_timezone_name(),
     }
 
 
@@ -242,6 +245,14 @@ async def api_set_settings(request: Request) -> dict:
         settings.set("anthropic_api_key", body["anthropic_api_key"])
     if body.get("claude_model"):
         settings.set("claude_model", body["claude_model"])
+    if "timezone" in body:
+        name = str(body["timezone"]).strip()
+        if name:
+            try:
+                ZoneInfo(name)
+            except (ZoneInfoNotFoundError, ValueError) as exc:
+                raise HTTPException(status_code=400, detail=f"Unknown timezone: {name}") from exc
+        settings.set("timezone", name)
     return {"success": True}
 
 
@@ -322,10 +333,16 @@ def api_device_views() -> dict:
             "title": view.title,
             "body": view.body,
             "items": [{"id": item.id, "text": item.text, "secondary": item.secondary,
-                       "detail": item.detail, "checked": item.checked}
+                       "detail": item.detail, "checked": item.checked,
+                       "start_ts": item.start_ts, "end_ts": item.end_ts, "all_day": item.all_day}
                       for item in (view.items or [])],
         })
-    return {"views": views}
+    # The device has no clock of its own worth trusting, so it sets its time
+    # from here, and shows it in the user's timezone.
+    now = time.time()
+    offset = datetime.fromtimestamp(now, settings.local_timezone()).utcoffset()
+    return {"views": views,
+            "clock": {"now": int(now), "utc_offset": int(offset.total_seconds()) if offset else 0}}
 
 
 @app.post("/api/plugins/{plugin_id}/device-action")

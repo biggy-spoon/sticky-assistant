@@ -11,6 +11,7 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "nvs_flash.h"
+#include "power_service.h"
 #include "recording_service.h"
 #include "settings_service.h"
 #include "touch_service.h"
@@ -22,6 +23,9 @@ namespace {
 constexpr const char* kTag = "main";
 constexpr uint32_t kMinHoldMs = 400;  // a shorter AI press is a tap, not a recording
 constexpr uint32_t kAssistantTaskStackWords = 6144;
+constexpr int64_t kSleepAfterIdleMs = 5 * 60 * 1000;
+constexpr uint32_t kSleepCheckMs = 5000;
+constexpr uint32_t kSleepDrawTimeoutMs = 10000;
 
 TaskHandle_t s_assistant_task = nullptr;
 esp_timer_handle_t s_recording_screen_timer = nullptr;
@@ -29,17 +33,19 @@ esp_timer_handle_t s_recording_screen_timer = nullptr;
 void ShowRecordingScreen(void*) { ui::ShowRecording(); }
 
 void OnPressStart(button_service::ButtonId id, void*) {
+    power_service::NoteActivity();
     if (id != button_service::ButtonId::kAi) {
         return;  // Up/Down only act on release -- see OnPressEnd
     }
     device_nav::PauseInput();
     // Capture starts now so the first words aren't lost, but the screen waits:
-    // a tap shouldn't trigger a full e-paper refresh.
+    // a tap shouldn't trigger a screen refresh.
     recording_service::StartCapture();
     esp_timer_start_once(s_recording_screen_timer, kMinHoldMs * 1000ULL);
 }
 
 void OnGesture(const touch_service::Gesture& gesture, void*) {
+    power_service::NoteActivity();
     switch (gesture.type) {
         case touch_service::GestureType::kTap:
             device_nav::OnTap(gesture.x, gesture.y);
@@ -60,6 +66,7 @@ void OnGesture(const touch_service::Gesture& gesture, void*) {
 }
 
 void OnPressEnd(button_service::ButtonId id, uint32_t held_ms, void*) {
+    power_service::NoteActivity();
     if (id == button_service::ButtonId::kUp) {
         device_nav::Navigate(-1);
         return;
@@ -79,7 +86,7 @@ void OnPressEnd(button_service::ButtonId id, uint32_t held_ms, void*) {
         return;
     }
 
-    device_nav::ResetToHome();
+    device_nav::BeginConversation();
     xTaskNotifyGive(s_assistant_task);
 }
 
@@ -91,8 +98,7 @@ void AssistantTask(void*) {
         size_t wav_len = 0;
         if (recording_service::BuildWav(&wav, &wav_len) != ESP_OK) {
             ESP_LOGW(kTag, "BuildWav failed");
-            device_nav::FinishConversation();
-            ui::ShowError("Couldn't prepare that recording");
+            device_nav::FinishConversationWithError("Couldn't prepare that recording");
             continue;
         }
 
@@ -101,29 +107,46 @@ void AssistantTask(void*) {
 
         const assistant_service::ConverseResult result = assistant_service::Converse(wav, wav_len);
         free(wav);
+        power_service::NoteActivity();  // the answer counts as fresh: give time to read it
 
-        device_nav::FinishConversation();
         if (result.success) {
             ESP_LOGI(kTag, "transcript=%s", result.transcript.c_str());
             ESP_LOGI(kTag, "reply=%s", result.reply.c_str());
-            ui::ShowReply(result.transcript, result.reply, 1 + device_nav::KnownPluginViewCount());
+            device_nav::FinishConversation(result.transcript, result.reply);
         } else {
             ESP_LOGW(kTag, "converse failed: http=%d error=%s", result.http_status,
                      result.error_message.c_str());
-            ui::ShowError(result.error_message.empty() ? "Unknown error" : result.error_message);
+            device_nav::FinishConversationWithError(
+                result.error_message.empty() ? "Unknown error" : result.error_message);
         }
+    }
+}
+
+// After five minutes with no button press or touch, the current screen is drawn
+// once more with a moon in the status bar and the board goes into deep sleep.
+// The picture stays on the e-paper. Any button wakes it, back on the same page.
+void SleepTask(void*) {
+    while (true) {
+        vTaskDelay(pdMS_TO_TICKS(kSleepCheckMs));
+        if (power_service::IdleMs() < kSleepAfterIdleMs || !device_nav::CanSleep() ||
+            ui::IsBusy()) {
+            continue;
+        }
+        ESP_LOGI(kTag, "idle for %lld s, going to sleep", power_service::IdleMs() / 1000);
+        device_nav::PrepareForSleep();
+        vTaskDelay(pdMS_TO_TICKS(50));  // let the redraw get queued
+        if (!ui::WaitIdle(kSleepDrawTimeoutMs)) {
+            ESP_LOGW(kTag, "screen still drawing, sleeping anyway");
+        }
+        epaper_display::Sleep();
+        power_service::EnterDeepSleep();
     }
 }
 
 }  // namespace
 
 extern "C" void app_main() {
-    gpio_config_t latch_cfg = {};
-    latch_cfg.pin_bit_mask = (1ULL << BOARD_POWER_HOLD_PIN) | (1ULL << BOARD_POWER_LOCK_PIN);
-    latch_cfg.mode = GPIO_MODE_OUTPUT;
-    ESP_ERROR_CHECK(gpio_config(&latch_cfg));
-    gpio_set_level(BOARD_POWER_HOLD_PIN, 1);
-    gpio_set_level(BOARD_POWER_LOCK_PIN, 1);
+    power_service::HoldPowerOn();
     vTaskDelay(pdMS_TO_TICKS(100));
 
     esp_err_t err = nvs_flash_init();
@@ -143,6 +166,10 @@ extern "C" void app_main() {
         return;
     }
 
+    const bool woke = power_service::WokeFromSleep();
+    if (power_service::Init() != ESP_OK) {
+        ESP_LOGW(kTag, "power service failed to start: no battery status");
+    }
     ESP_ERROR_CHECK(epaper_display::Init());
     ESP_ERROR_CHECK(ui::Init());
     ESP_ERROR_CHECK(recording_service::Init());
@@ -166,15 +193,15 @@ extern "C" void app_main() {
     }
 
     const settings_service::Settings settings = settings_service::Get();
-    ESP_LOGI(kTag, "connecting to WiFi...");
+    ESP_LOGI(kTag, "%s, connecting to WiFi...", woke ? "woke from sleep" : "powered on");
     const bool wifi_connected =
         wifi_service::ConnectStaBlocking(settings.wifi_ssid, settings.wifi_password) == ESP_OK;
-    device_nav::SetWifiConnected(wifi_connected);
-    if (wifi_connected) {
-        device_nav::Preload();
-    } else {
+    if (!wifi_connected) {
         ESP_LOGE(kTag, "WiFi connect failed; recording will work but uploads will fail");
-        ui::ShowIdle(false);
     }
-    ESP_LOGI(kTag, "ready: hold the AI button to record, Up/Down or swipe to change page");
+    device_nav::Start(wifi_connected, woke);
+    power_service::NoteActivity();  // the five minutes count from here
+
+    xTaskCreate(SleepTask, "sleep", 4096, nullptr, 2, nullptr);
+    ESP_LOGI(kTag, "ready: hold the AI button to talk; tap tiles, swipe or use Up/Down to move");
 }

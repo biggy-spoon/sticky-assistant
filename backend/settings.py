@@ -4,8 +4,11 @@ calendar config are hot-editable from the dashboard without a restart.
 Whisper settings are not here -- the model is loaded once at startup, so
 changing it requires a restart; those stay env-only (see app.py).
 """
+import logging
 import os
+from datetime import datetime, tzinfo
 from typing import Optional
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 import storage
 
@@ -47,6 +50,24 @@ def get_anthropic_api_key() -> str:
 
 def get_claude_model() -> str:
     return get("claude_model", "claude-haiku-5-5") or "claude-haiku-5-5"
+
+
+def get_timezone_name() -> str:
+    # "todo_timezone" is where this lived before it applied to the whole device.
+    return get("timezone", "") or get("todo_timezone", "") or ""
+
+
+def local_timezone() -> tzinfo:
+    """The user's timezone, for the device's clock, its agenda and the todo
+    list's daily reset. The server's own timezone if none is set or the name is
+    unknown."""
+    name = get_timezone_name()
+    if name:
+        try:
+            return ZoneInfo(name)
+        except (ZoneInfoNotFoundError, ValueError):
+            logging.getLogger("sticky-claude").warning("Unknown timezone %r, using the server's", name)
+    return datetime.now().astimezone().tzinfo
 
 
 def get_calendar_config() -> dict:

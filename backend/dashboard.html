@@ -337,6 +337,11 @@
         <label for="claude-model">Claude model</label>
         <input id="claude-model" type="text" placeholder="claude-haiku-5-5">
       </div>
+      <div class="field-group">
+        <label for="timezone">Timezone</label>
+        <input id="timezone" type="text" placeholder="e.g. America/New_York">
+        <p class="hint">For the device's clock, its calendar and the todo list's reset at midnight. Blank uses this server's timezone.</p>
+      </div>
       <div class="card-actions">
         <button type="button" class="btn" onclick="saveCoreSettings()">Save</button>
         <span class="save-msg" id="core-save-msg">
@@ -492,15 +497,24 @@
     async function loadCoreSettings() {
       const config = await fetch('/api/settings').then(r => r.json());
       document.getElementById('claude-model').value = config.claude_model || '';
+      document.getElementById('timezone').value = config.timezone || '';
     }
 
     async function saveCoreSettings() {
-      const body = { claude_model: document.getElementById('claude-model').value };
+      const body = {
+        claude_model: document.getElementById('claude-model').value,
+        timezone: document.getElementById('timezone').value,
+      };
       const key = document.getElementById('anthropic-key').value;
       if (key) body.anthropic_api_key = key;
-      await fetch('/api/settings', {
+      const response = await fetch('/api/settings', {
         method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(body),
       });
+      if (!response.ok) {
+        const error = await response.json().catch(() => ({}));
+        alert(error.detail || 'Could not save the settings');
+        return;
+      }
       flashSaved('core-save-msg');
       loadStatus();
     }

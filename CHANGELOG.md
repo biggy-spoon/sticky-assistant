@@ -87,8 +87,28 @@ tracked under Unreleased until there's a first stable cut.
   carry over.
 - Plugin pages draw immediately from a cached copy and refresh in the
   background, redrawing only if the current page changed.
+- A new on-device interface modelled on Sticky OS: a status bar with the
+  time, page dots, WiFi and battery on every screen; a home screen with a large
+  clock, the next event and a tile for Claude and each plugin; Calendar as an
+  agenda with a "now" card and a week strip; the todo list as a checklist; and
+  the last conversation on its own Claude page. Liberation Sans replaces the
+  Montserrat fonts.
+- Partial e-paper refresh: screens change in well under a second without a
+  flash, with a full refresh mixed in to clear ghosting, so the clock can update
+  every minute.
+- Sleep: after 5 minutes without input the current screen is frozen with a
+  moon and the board deep-sleeps. Any button wakes it on the same page, and the
+  last conversation survives.
+- Battery level and charging indicator, and charging enabled: the charger's
+  enable pin was never driven, which can stop the battery charging.
+- A `timezone` setting on the dashboard for the device's clock, the agenda and
+  the todo reset (the todo plugin's own setting is still read if it's set).
+- Plugins can return `view_type="agenda"` with `start_ts`, `end_ts` and
+  `all_day` on each item, and `view_type="text"` views are now drawn.
 
 ### Changed
+- Flash configured as 16MB with a custom partition table (6MB app). NVS stays
+  at the same offset, so saved settings survive the update.
 - **Plugin API:** `Plugin.device_action(item_id)` is now
   `device_action(item_id, checked)`, and `POST
   /api/plugins/{id}/device-action` requires `checked`. `DeviceViewItem` gains an
@@ -96,6 +116,7 @@ tracked under Unreleased until there's a first stable cut.
   `set_todo_done`.
 
 ### Fixed
+- Google Calendar all-day events came through as events at midnight.
 - Rendering ran on the button polling task, which overflowed its stack and
   hid button releases for the length of a screen refresh, so every AI press
   measured about 2.3 seconds. A dedicated UI task now owns the display.

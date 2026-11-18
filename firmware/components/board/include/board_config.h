@@ -1,8 +1,7 @@
 // reTerminal Sticky (ESP32-S3R8) pin map, scoped to what this project uses:
 // the AI/record + Up/Down buttons, the PDM microphone, the SSD1677 ePaper
-// panel, and the GT911 touch panel. SD card and the fuel-gauge/IMU sensors are
-// on this board too but are not wired up here since this project doesn't use
-// them.
+// panel, the GT911 touch panel, and the battery's fuel gauge and charger. The
+// SD card and the other sensors are on this board too but aren't used here.
 #pragma once
 
 #include "driver/gpio.h"
@@ -14,9 +13,9 @@
 #define BOARD_POWER_HOLD_PIN     GPIO_NUM_45
 #define BOARD_POWER_LOCK_PIN     GPIO_NUM_46
 
-#define BOARD_BUTTON_AI_PIN      GPIO_NUM_4  // long-press = record, short tap = confirm/toggle
-#define BOARD_BUTTON_UP_PIN     GPIO_NUM_5   // previous device view / row
-#define BOARD_BUTTON_DOWN_PIN    GPIO_NUM_6   // next device view / row
+#define BOARD_BUTTON_AI_PIN      GPIO_NUM_4  // long-press = record, short press = back
+#define BOARD_BUTTON_UP_PIN      GPIO_NUM_5  // previous page
+#define BOARD_BUTTON_DOWN_PIN    GPIO_NUM_6  // next page
 
 #define BOARD_PDM_CLK_PIN        GPIO_NUM_19
 #define BOARD_PDM_DATA_PIN       GPIO_NUM_20
@@ -46,3 +45,14 @@
 #define BOARD_TP_RST_PIN         GPIO_NUM_41
 #define BOARD_TP_PWR_EN_PIN      GPIO_NUM_42
 #define BOARD_TP_I2C_ADDR        0x14
+
+// Battery, charger and the board's second I2C bus, from the Sticky OS
+// firmware's pins.h (https://github.com/Sticky-OS/sticky-os, MIT). GPIO0 is a
+// strapping pin, which is fine once the chip has booted.
+#define BOARD_SENSOR_I2C_SCL_PIN GPIO_NUM_0
+#define BOARD_SENSOR_I2C_SDA_PIN GPIO_NUM_1
+#define BOARD_FUEL_GAUGE_ADDR    0x55          // BQ27220
+#define BOARD_USB_POWER_PIN      GPIO_NUM_9    // high while USB power is present
+// BQ25616 charger enable, active low. Left floating the board sees USB power
+// but never charges the battery.
+#define BOARD_CHARGER_EN_PIN     GPIO_NUM_39
