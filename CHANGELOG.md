@@ -87,8 +87,44 @@ tracked under Unreleased until there's a first stable cut.
   carry over.
 - Plugin pages draw immediately from a cached copy and refresh in the
   background, redrawing only if the current page changed.
+- A new on-device interface modelled on Sticky OS: a status bar with the
+  time, page dots, WiFi and battery on every screen; a home screen with a large
+  clock, the next event and a tile for Claude and each plugin; Calendar as an
+  agenda with a "now" card and a week strip; the todo list as a checklist; and
+  the last conversation on its own Claude page. Liberation Sans replaces the
+  Montserrat fonts.
+- Partial e-paper refresh: screens change in well under a second without a
+  flash, with a full refresh mixed in to clear ghosting, so the clock can update
+  every minute.
+- Sleep: after 5 minutes without input the current screen is frozen with a
+  moon and the board deep-sleeps. Any button wakes it on the same page, and the
+  last conversation survives.
+- Battery level and charging indicator, and charging enabled: the charger's
+  enable pin was never driven, which can stop the battery charging.
+- A `timezone` setting on the dashboard for the device's clock, the agenda and
+  the todo reset (the todo plugin's own setting is still read if it's set).
+- Plugins can return `view_type="agenda"` with `start_ts`, `end_ts` and
+  `all_day` on each item, and `view_type="text"` views are now drawn.
+- Weather plugin: current conditions on the home screen, a 7-day forecast with
+  hourly detail on the device, and a `get_weather_forecast` tool, from
+  Open-Meteo.
+- A default Settings plugin: units, timezone, weather location and font on the
+  device (tap a row to step it on), on the dashboard, and by voice through an
+  `update_settings` tool. Plugin items can carry `action: "tap"`.
+- Calendar: `update_calendar_event` and `delete_calendar_event` tools (CalDAV
+  and Google). Times without a timezone are read in the user's.
+- Conversation memory: the last three exchanges, for ten minutes.
+- AI button: a double press is a full refresh, and a single press on home
+  sleeps. A sleeping screen shows an "Asleep" banner.
+- Custom fonts: `firmware/tools/make_fonts.sh` builds your own TrueType font
+  into a git-ignored folder, and the device's Settings page switches to it.
 
 ### Changed
+- Page changes and scrolling use a full e-paper refresh, since partial refreshes
+  of a whole new page ghosted badly. Partial refreshes, with a second pass that
+  darkens text, are kept for updates within a screen.
+- Flash configured as 16MB with a custom partition table (6MB app). NVS stays
+  at the same offset, so saved settings survive the update.
 - **Plugin API:** `Plugin.device_action(item_id)` is now
   `device_action(item_id, checked)`, and `POST
   /api/plugins/{id}/device-action` requires `checked`. `DeviceViewItem` gains an
@@ -96,6 +132,10 @@ tracked under Unreleased until there's a first stable cut.
   `set_todo_done`.
 
 ### Fixed
+- The battery level: I2C controller 1 stops after its first transaction on this
+  board, so the gauge is read on a bus set up fresh each time, and its first
+  answer, which can be stale, is read twice.
+- Google Calendar all-day events came through as events at midnight.
 - Rendering ran on the button polling task, which overflowed its stack and
   hid button releases for the length of a screen refresh, so every AI press
   measured about 2.3 seconds. A dedicated UI task now owns the display.

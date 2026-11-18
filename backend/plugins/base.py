@@ -54,6 +54,14 @@ class DeviceViewItem:
     checked: Optional[bool] = None
     secondary: str = ""  # optional smaller second line, e.g. an event's date
     detail: str = ""  # optional full text; tapping the row opens it on its own screen
+    # For view_type "agenda": when the item happens, as Unix timestamps. An
+    # all-day item's start is local midnight of its first day.
+    start_ts: int = 0
+    end_ts: int = 0
+    all_day: bool = False
+    # "tap": tapping the row calls device_action(id, None), and the device then
+    # fetches the view again to show the result (e.g. a setting stepping on).
+    action: str = ""
 
 
 @dataclass
@@ -67,7 +75,7 @@ class DeviceView:
     plugin hub) can describe a screen but never execute code on the
     device.
     """
-    view_type: str  # "text" | "list"
+    view_type: str  # "text" | "list" | "agenda" (a list of timed items, grouped by day)
     title: str
     body: Optional[str] = None                    # view_type == "text"
     items: Optional[list[DeviceViewItem]] = None   # view_type == "list"
@@ -128,10 +136,9 @@ class Plugin(ABC):
         with no use for a device screen needs to do nothing here."""
         return None
 
-    def device_action(self, item_id: str, checked: bool) -> None:
-        """Optional: called when the user taps a checkable row (by its
-        DeviceViewItem.id) on the device, with the state it should now have.
-        Only called for items this plugin's device_view() returned with
-        `checked` set to True/False. Default: no-op, for a plugin whose device
-        screen is read-only."""
+    def device_action(self, item_id: str, checked: Optional[bool]) -> None:
+        """Optional: called when the user taps a row on the device, by its
+        DeviceViewItem.id. For a checkable row, `checked` is the state it should
+        now have. For a row with action="tap", it's None. Default: no-op, for a
+        plugin whose device screen is read-only."""
         return None

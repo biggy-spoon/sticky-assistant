@@ -11,7 +11,10 @@ view over a small JSON API.
 import io
 import logging
 import os
+import threading
+import time
 from datetime import datetime, timezone
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 import anthropic
 from anthropic import Anthropic
@@ -43,8 +46,9 @@ SYSTEM_PROMPT_TEMPLATE = (
     "anything you aren't sure of, and give the answer itself rather than saying what you "
     "searched for. Your reply is shown as plain text on a small e-paper screen with no "
     "speaker, so keep it to 2-4 short sentences, with no markdown, lists or citations. "
-    "Today's date is {today}. When a tool is available for what the user is asking, use "
-    "it rather than just describing what you would do."
+    "Today is {today}. When a tool is available for what the user is asking, use "
+    "it rather than just describing what you would do. Earlier messages in the conversation "
+    "are the user's recent requests, so a short reply like \"yes\" answers your last question."
 )
 
 # Models that accept the newer web search tool. The model setting is free text,
@@ -63,6 +67,30 @@ def _web_search_tool(model: str) -> dict:
     billed."""
     version = "20260209" if model in _WEB_SEARCH_20260209_MODELS else "20250305"
     return {"type": f"web_search_{version}", "name": "web_search", "max_uses": 3}
+
+# Recent exchanges, so a follow-up ("yes, the 13th") makes sense. Only the text
+# of each question and answer is kept, in memory, for a few minutes.
+MEMORY_EXCHANGES = 3
+MEMORY_SECONDS = 10 * 60
+_memory: list[tuple[float, str, str]] = []
+_memory_lock = threading.Lock()
+
+
+def _recent_exchanges() -> list[dict]:
+    cutoff = time.time() - MEMORY_SECONDS
+    with _memory_lock:
+        _memory[:] = [entry for entry in _memory if entry[0] >= cutoff][-MEMORY_EXCHANGES:]
+        recent = list(_memory)
+    messages: list[dict] = []
+    for _, question, answer in recent:
+        messages.append({"role": "user", "content": question})
+        messages.append({"role": "assistant", "content": answer})
+    return messages
+
+
+def _remember(question: str, answer: str) -> None:
+    with _memory_lock:
+        _memory.append((time.time(), question, answer))
 
 app = FastAPI(title="sticky-claude backend")
 whisper_model: WhisperModel | None = None
@@ -128,6 +156,7 @@ async def converse(request: Request) -> JSONResponse:
 
     log.info("transcript=%r reply=%r", transcript, reply)
     storage.log_conversation(transcript, reply, success=True)
+    _remember(transcript, reply)
     return JSONResponse({"transcript": transcript, "reply": reply})
 
 
@@ -173,11 +202,14 @@ def _final_text(content: list) -> str:
 def _converse_with_claude(transcript: str, api_key: str, max_tool_iterations: int = 5) -> str:
     client = Anthropic(api_key=api_key)
     model = settings.get_claude_model()
-    system_prompt = SYSTEM_PROMPT_TEMPLATE.format(today=datetime.now(timezone.utc).date().isoformat())
+    now = datetime.now(settings.local_timezone())
+    system_prompt = SYSTEM_PROMPT_TEMPLATE.format(
+        today=f"{now.strftime('%A, %B %d, %Y')}, and the time is {now.strftime('%I:%M %p').lstrip('0')}"
+              f" ({settings.get_timezone_name() or 'server time'})")
     tool_defs, tool_owner = _collect_tools()
     tool_defs.append(_web_search_tool(model))
 
-    messages: list[dict] = [{"role": "user", "content": transcript}]
+    messages: list[dict] = _recent_exchanges() + [{"role": "user", "content": transcript}]
 
     for _ in range(max_tool_iterations):
         # Thinking counts towards max_tokens, so this is well above the reply length.
@@ -232,6 +264,9 @@ def api_get_settings() -> dict:
     return {
         "anthropic_api_key": redacted["anthropic_api_key"],
         "claude_model": settings.get_claude_model(),
+        "timezone": settings.get_timezone_name(),
+        "units": settings.get_units(),
+        "device_font": settings.get_device_font(),
     }
 
 
@@ -242,6 +277,18 @@ async def api_set_settings(request: Request) -> dict:
         settings.set("anthropic_api_key", body["anthropic_api_key"])
     if body.get("claude_model"):
         settings.set("claude_model", body["claude_model"])
+    if "timezone" in body:
+        name = str(body["timezone"]).strip()
+        if name:
+            try:
+                ZoneInfo(name)
+            except (ZoneInfoNotFoundError, ValueError) as exc:
+                raise HTTPException(status_code=400, detail=f"Unknown timezone: {name}") from exc
+        settings.set("timezone", name)
+    if body.get("units") in ("imperial", "metric"):
+        settings.set("units", body["units"])
+    if body.get("device_font") in ("custom", "default"):
+        settings.set("device_font", body["device_font"])
     return {"success": True}
 
 
@@ -304,13 +351,17 @@ def api_plugin_hub() -> dict:
 # --- Device screens (Up/Down button navigation on the ePaper panel) ----
 
 @app.get("/api/device/views")
-def api_device_views() -> dict:
+def api_device_views(fonts: str = "") -> dict:
     """Every configured plugin's own on-device screen, in a fixed order
     (plugin registration order), for the firmware to page through. The device's own home/conversation screen isn't
     included -- it's rendered locally by the firmware without a backend
     round-trip."""
+    from plugins import settings_plugin
+    settings_plugin.device_has_custom_font = "custom" in fonts.split(",")
     views = []
-    for plugin in plugins.all_plugins():
+    # Settings goes last, after the plugins it configures.
+    ordered = sorted(plugins.all_plugins(), key=lambda plugin: plugin.id == "settings")
+    for plugin in ordered:
         if not plugin.is_configured():
             continue
         view = plugin.device_view()
@@ -322,10 +373,25 @@ def api_device_views() -> dict:
             "title": view.title,
             "body": view.body,
             "items": [{"id": item.id, "text": item.text, "secondary": item.secondary,
-                       "detail": item.detail, "checked": item.checked}
+                       "detail": item.detail, "checked": item.checked,
+                       "start_ts": item.start_ts, "end_ts": item.end_ts, "all_day": item.all_day,
+                       "action": item.action}
                       for item in (view.items or [])],
         })
-    return {"views": views}
+    # The device has no clock of its own worth trusting, so it sets its time
+    # from here, and shows it in the user's timezone.
+    now = time.time()
+    offset = datetime.fromtimestamp(now, settings.local_timezone()).utcoffset()
+    result = {"views": views,
+              "clock": {"now": int(now), "utc_offset": int(offset.total_seconds()) if offset else 0},
+              "device": {"font": settings.get_device_font()}}
+    weather = plugins.get("weather")
+    if weather is not None and weather.is_configured():
+        from plugins import weather_plugin
+        current = weather_plugin.current_conditions()
+        if current is not None:
+            result["weather"] = current  # the home screen's "now" corner
+    return result
 
 
 @app.post("/api/plugins/{plugin_id}/device-action")
@@ -337,8 +403,9 @@ async def api_plugin_device_action(plugin_id: str, request: Request) -> dict:
     item_id = body.get("item_id")
     if not item_id:
         raise HTTPException(status_code=400, detail="item_id is required")
+    # Checkable rows send the state they should now have; tap rows send none.
     checked = body.get("checked")
-    if not isinstance(checked, bool):
-        raise HTTPException(status_code=400, detail="checked must be true or false")
+    if checked is not None and not isinstance(checked, bool):
+        raise HTTPException(status_code=400, detail="checked must be true, false or absent")
     plugin.device_action(str(item_id), checked)
     return {"success": True}

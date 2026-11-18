@@ -6,12 +6,22 @@ Hold the AI/record button, speak, release — the clip gets POSTed to the
 tool-use if you've connected one), and the reply renders on the ePaper
 screen.
 
-Swipe left or right, or press Up/Down, to move between home and each configured
-plugin's own on-device screen (see `device_nav`, below). Swipe up or down to
-scroll. Tap a checkable row to toggle it (e.g. a todo), or a row with details to
-open them (e.g. a calendar event). A short press of the AI button goes back:
-from details to the list, from a plugin screen to home, and on home it clears
-any reply.
+The interface follows [Sticky OS](https://github.com/Sticky-OS/sticky-os): a
+status bar on every screen, and a home screen with a clock, your next event and
+a tile for Claude and each configured plugin (see `device_nav`, below). Tap a
+tile, swipe left or right, or press Up/Down to move between pages, and tap the
+status bar to go home. Swipe up or down to scroll. Tap a checkable row to toggle
+it (e.g. a todo), or a row with details to open them (e.g. a calendar event). A
+short press of the AI button goes back: from details to the list, and from any
+other page to home. On home, a short press puts the board to sleep. A double
+press redraws the screen with a full refresh, which clears any faint traces the
+quick partial updates leave behind. A single press waits about a third of a
+second before acting, to tell it from a double press.
+
+After 5 minutes with no touch or button press, the current screen is drawn once
+more with a moon in the status bar and an "Asleep" banner along the bottom, and
+the board goes into deep sleep. Any
+button wakes it, back on the same page.
 
 ## Build
 
@@ -44,7 +54,8 @@ and reboots into normal operation.
 
 | Component | Role |
 | --- | --- |
-| `board` | GPIO/SPI pin map for the buttons, PDM mic, and ePaper panel |
+| `board` | GPIO/SPI pin map for the buttons, PDM mic, ePaper panel, touch, battery gauge and charger |
+| `power_service` | Power latch, charging, battery level (BQ27220), idle time and deep sleep |
 | `button_service` | Polls the AI/Up/Down buttons, debounced; press-start/press-end callbacks |
 | `pdm_mic` | I2S PDM RX capture, 16kHz mono 16-bit |
 | `recording_service` | PSRAM clip buffer + WAV encoding |
@@ -54,9 +65,29 @@ and reboots into normal operation.
 | `assistant_service` | POSTs the WAV to the backend, parses `{transcript, reply}` |
 | `device_nav` | Page changes, scrolling, taps and "back" across plugin device-views. Draws from a cached `GET /api/device/views` and refreshes in the background; sends toggles with `POST /api/plugins/{id}/device-action` |
 | `touch_service` | GT911 bring-up, polling, tap and swipe detection, and mapping to screen coordinates |
-| `epaper_display` | SPI transport + SSD1677 command set + 1bpp framebuffer |
-| `ui` | LVGL screens rendered via `epaper_display`. Its own task owns LVGL and the panel, so `Show*` calls never block; if several arrive during a refresh, only the newest is drawn |
+| `epaper_display` | SPI transport + SSD1677 command set + 1bpp framebuffer, full and partial refresh, panel sleep |
+| `ui` | LVGL screens in Sticky OS's style, rendered via `epaper_display`. Its own task owns LVGL and the panel, so `Show*` calls never block; if several arrive during a refresh, only the newest is drawn. LVGL's heap is 128KB in PSRAM |
 | `main` | Wires button hold → record → upload → display, buttons and gestures → `device_nav`, and first-run routing |
+
+## Using your own font
+
+The device uses Liberation Sans by default. To use another typeface, give
+`tools/make_fonts.sh` a regular and a bold TrueType file:
+
+```sh
+tools/make_fonts.sh ~/Fonts/MyFont-Regular.ttf ~/Fonts/MyFont-Bold.ttf
+idf.py build flash
+```
+
+It writes the UI's seven sizes to `components/ui/fonts/custom/`, and the build
+uses them whenever that folder exists. The folder is ignored by git, so a font
+licensed only for your own devices never ends up in the repository. Delete the
+folder to go back to Liberation Sans. Icons and drawings are shapes, not
+characters, so they don't change. It needs Node.js for `npx lv_font_conv`, and
+one `idf.py build` beforehand so LVGL's sources are downloaded.
+
+Only printable ASCII, the degree sign and the bullet are taken from the font.
+A serif or wider font takes more room, so check long titles after switching.
 
 ## Known gaps
 
@@ -77,18 +108,21 @@ and reboots into normal operation.
 4. **Touch bring-up isn't fully explained.** The GT911 only starts properly here
    with a real RST pulse followed by INT held low for 50ms. Other firmware for
    this board works without that INT step, and we don't yet know why.
-5. **No partial e-paper refresh.** Every screen change is a full refresh
-   (a few seconds). Fine for this project's rate of UI changes; would
-   need real work to support faster partial updates if that ever
-   mattered here. Because of this, a tap made during a refresh is ignored,
-   since it might land on a row that's about to move.
-6. **Text views aren't drawn.** A plugin returning `view_type="text"` shows
-   "Nothing here yet", because the firmware only draws list items and ignores
-   `body`.
-7. **Very long lists are cut short.** LVGL's 32KB pool holds about 20 rows, so
-   drawing stops when less than 3KB is free, and later rows can't be reached.
+5. **A tap during a refresh is ignored.** Partial refreshes are quick, but a
+   tap that lands while one is running might hit a row that's about to move.
+6. **Only buttons wake the board.** The touch controller is powered off in
+   deep sleep, so a tap on a sleeping screen does nothing. The clock and battery
+   on a sleeping screen are as they were when it fell asleep.
+7. **Waking is a full refresh.** The panel's controller loses its image memory
+   in sleep, so the first screen after waking flashes.
 
 ## Licensing note
+
+The partial refresh, panel sleep and power-off sequences in `epaper_display`,
+the deep sleep sequence in `power_service` and the battery pins in `board` are
+adapted from [Sticky OS](https://github.com/Sticky-OS/sticky-os) and the
+SSD1677 driver it vendors, both MIT. `components/ui/fonts` is Liberation Sans
+under the SIL Open Font License (`OFL-LiberationSans.txt` there).
 
 `components/epaper_display` is **GPLv3**, not MIT like the rest of this
 repository — its SSD1677 command sequence is ported from the GPLv3

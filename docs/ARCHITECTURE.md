@@ -16,7 +16,17 @@
   `screen_y = 479 - raw_x`. Measured on hardware. It reports taps and swipes
   (at least 60px within 1.5s).
 - Power latch: GPIO45 and GPIO46 are driven high at boot (schematic
-  `PWR_HOLD`/`PWR_LOCK`).
+  `PWR_HOLD`/`PWR_LOCK`), and held high through deep sleep.
+- Battery: a BQ27220 fuel gauge at 0x55 on a second I2C bus (SCL GPIO0, SDA
+  GPIO1), USB power on GPIO9, and the BQ25616 charger's active-low enable on
+  GPIO39, which `power_service` drives low so the battery charges. These come
+  from the Sticky OS firmware's pin map. On this board I2C controller 1 stops
+  working after its first transaction (every device on that bus then times
+  out, with both lines idle high), so `power_service` sets the bus up fresh for
+  each reading. The gauge's first answer after waking can be stale, so the
+  percentage is read twice.
+- Flash: 32MB on the board, configured as 16MB (the most without 32-bit
+  addressing), with a 6MB app partition.
 
 Pin map lives in `firmware/components/board/include/board_config.h`,
 confirmed against the
@@ -135,8 +145,10 @@ repository is MIT.
   case-insensitive text search rather than requiring one. On the device, items
   finished today stay at the bottom, struck through. Earlier ones are left out
   of `device_view()`, which is the daily reset, and stay in the table as
-  history. The day boundary uses the `todo_timezone` setting, or the server's
-  timezone if that's blank.
+  history. The day boundary uses the core `timezone` setting (the dashboard's
+  Overview tab), falling back to the older `todo_timezone`, then the server's
+  timezone. The same timezone sets the device's clock: `GET
+  /api/device/views` returns `clock: {now, utc_offset}` alongside the views.
 - Web search isn't a plugin. `app.py` adds Anthropic's server-side tool to every
   request, so Anthropic runs it and the results come back in the same response.
   It uses `web_search_20260209` on models known to accept it and
