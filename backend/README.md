@@ -48,7 +48,8 @@ the public internet without putting something in front of it.
 
 A plugin is code that runs on this backend, so the settings page and the
 device only install hub entries marked `"reviewed": true` with a
-`download_url` to a single `.py` file on raw.githubusercontent.com. The file
+`download_url` to a single `.py` file on raw.githubusercontent.com, pinned to
+a commit so what was reviewed is what gets installed. The file
 is checked (size, name), saved to `plugins/`, and loaded without a restart.
 Anything else is still installed by hand.
 

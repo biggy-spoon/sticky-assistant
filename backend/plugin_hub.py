@@ -4,7 +4,8 @@ already installed.
 
 A plugin is code that runs on this server, so installing one from the device
 is limited to entries the hub's maintainers have marked "reviewed": true, with
-a "download_url" to a single Python file on raw.githubusercontent.com. Anything
+a "download_url" to a single Python file on raw.githubusercontent.com at a
+pinned commit. Anything
 else is still installed by hand (copy it into backend/plugins/ and restart):
 see the hub's README.
 """
@@ -53,7 +54,10 @@ def get_index(force: bool = False) -> tuple[list[dict], Optional[str]]:
 
 _PLUGINS_DIR = os.path.join(os.path.dirname(__file__), "plugins")
 _MAX_PLUGIN_BYTES = 200 * 1024
-_RAW_PREFIX = "https://raw.githubusercontent.com/"
+# A single .py file at a full commit SHA: what the hub reviewed is exactly what
+# gets installed, even if the plugin's branch changes later.
+_PINNED_DOWNLOAD = re.compile(
+    r"^https://raw\.githubusercontent\.com/[\w.-]+/[\w.-]+/[0-9a-f]{40}/[\w./-]+\.py$")
 _MODULE_NAME = re.compile(r"^[a-z][a-z0-9_]{1,40}$")
 
 
@@ -67,7 +71,7 @@ class InstallError(Exception):
 
 def installable(entry: dict) -> bool:
     url = str(entry.get("download_url") or "")
-    return entry.get("reviewed") is True and url.startswith(_RAW_PREFIX) and url.endswith(".py")
+    return entry.get("reviewed") is True and bool(_PINNED_DOWNLOAD.match(url))
 
 
 def install(plugin_id: str, register_routes=None) -> str:
