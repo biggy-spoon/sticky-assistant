@@ -2,7 +2,6 @@
 
 [![CI](https://github.com/biggy-spoon/sticky-assistant/actions/workflows/ci.yml/badge.svg)](https://github.com/biggy-spoon/sticky-assistant/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
-[![Firmware license: GPLv3](https://img.shields.io/badge/firmware%2Fepaper_display-GPLv3-orange.svg)](firmware/components/epaper_display/LICENSE)
 
 A push-to-talk voice assistant on a [Seeed Studio reTerminal Sticky](https://www.seeedstudio.com/sticky/),
 proxied through your own always-on server to the AI of your choice: Claude by
@@ -97,11 +96,18 @@ details and design notes behind this.
 ## Quickstart
 
 **1. Backend** (on your Pi, ZimaOS box, or any always-on machine on your
-home network):
+home network). With Docker:
+
+```bash
+cp backend/.env.example backend/.env   # optional: API keys can be set on the device
+docker compose up -d
+```
+
+Or with Python:
 
 ```bash
 cd backend
-cp .env.example .env   # fill in ANTHROPIC_API_KEY
+cp .env.example .env   # fill in an AI provider's API key
 pip install -r requirements.txt
 uvicorn app:app --host 0.0.0.0 --port 8000
 ```
@@ -109,7 +115,12 @@ uvicorn app:app --host 0.0.0.0 --port 8000
 Once the device is set up (below), open its address in a browser (shown on its
 Settings page) to connect a calendar and check status.
 
-**2. Firmware** (requires [ESP-IDF](https://docs.espressif.com/projects/esp-idf/en/stable/esp32s3/get-started/index.html) v5.3.x):
+**2. Firmware.** The easiest way is the browser: each
+[release](https://github.com/biggy-spoon/sticky-assistant/releases) has the
+files for the [Seeed Sticky Playground](https://www.seeedstudio.com/sticky/playground/firmware/)
+and any ESP web flasher (`manifest.json`, or `sticky-assistant-full.bin` at
+`0x0`). Erase first if another firmware is on the device. To build it yourself
+(requires [ESP-IDF](https://docs.espressif.com/projects/esp-idf/en/stable/esp32s3/get-started/index.html) v5.3.x):
 
 ```bash
 cd firmware
@@ -118,11 +129,14 @@ idf.py build
 idf.py -p <PORT> flash
 ```
 
-**3. First boot**: the device opens a WiFi network named
-`StickyAssistant-Setup`. Connect to it from your phone, a setup page should
-open automatically (or browse to `http://192.168.4.1/`); enter your real
-WiFi credentials and the backend's address
-(`http://<that-machine>:8000/converse`). The device reboots and connects.
+**3. First boot**: the screen shows the steps. The device opens a WiFi
+network named `StickyAssistant-Setup`. Connect to it from your phone, a setup
+page should open automatically (or browse to `http://192.168.4.1/`); enter
+your real WiFi credentials and the backend's address
+(`http://<that-machine>:8000/converse`). The device reboots and connects. If
+the WiFi or the backend can't be reached, home says so and what to check. To
+change the network later, hold Up and Down together for two seconds as the
+device starts.
 
 See `firmware/README.md` and `backend/README.md` for the full detail,
 including known gaps and calendar provider setup.
@@ -135,6 +149,9 @@ including known gaps and calendar provider setup.
   system (`backend/plugins/`; calendar and the todo list ship by
   default), and a SQLite-backed dashboard/history/settings.
 - `docs/ARCHITECTURE.md` — hardware details and design notes.
+- `playground/` — the entry for the Seeed Sticky Playground, and how to
+  submit a release to it. `scripts/package_release.py` and
+  `.github/workflows/release.yml` build the release files from a `v*` tag.
 
 ## Status
 
@@ -151,24 +168,22 @@ See [`CONTRIBUTING.md`](CONTRIBUTING.md). This project follows the
 
 ## License
 
-MIT (see [`LICENSE`](LICENSE)), **except**
-`firmware/components/epaper_display/`, which is GPLv3 — its SSD1677
-command sequence is ported from the GPLv3-licensed
-[`folloup-sticky`](https://github.com/alxv2016/folloup-sticky) project
-(confirmed working on the same board/panel). See that directory's own
-`LICENSE` file.
+MIT (see [`LICENSE`](LICENSE)), firmware and backend alike. The e-paper
+driver follows the MIT-licensed SSD1677 driver from Sticky OS, whose notice is
+in `firmware/components/epaper_display/LICENSE-sticky-os`. The fonts are
+under the SIL Open Font License.
 
 ## Acknowledgments
 
 - [Sticky OS](https://github.com/Sticky-OS/sticky-os) (MIT) — the on-device
   interface follows its design, and the partial refresh, sleep sequence and
-  battery pins are adapted from it and the SSD1677 driver it vendors (MIT,
-  Copyright (c) 2026 limengdu).
+  battery pins are adapted from it, and the e-paper driver follows the SSD1677
+  driver it vendors by limengdu (MIT, Copyright (c) 2026 The Sticky OS
+  contributors).
 - [Liberation Sans](https://github.com/liberationfonts/liberation-fonts) — the
   device's typeface, under the SIL Open Font License
   (`firmware/components/ui/fonts/OFL-LiberationSans.txt`).
 - [`folloup-sticky`](https://github.com/alxv2016/folloup-sticky) by
-  alxv2016 — the reference this project's board pin map and ePaper
-  driver are built from/ported from.
+  alxv2016 — the reference the board pin map was checked against.
 - [Seeed Studio](https://www.seeedstudio.com/) for the reTerminal Sticky
   hardware.

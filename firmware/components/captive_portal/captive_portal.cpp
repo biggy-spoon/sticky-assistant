@@ -155,6 +155,8 @@ const char* kSetupPageHtml = R"HTML(<!DOCTYPE html>
       <label for="backend_url">Backend URL</label>
       <input id="backend_url" name="backend_url" placeholder="http://192.168.1.50:8000/converse"
              required autocapitalize="off" autocorrect="off">
+      <p class="sub">The backend is the sticky-assistant server running on a computer
+        on your network (port 8000). Setup: github.com/biggy-spoon/sticky-assistant</p>
       <button type="submit">Save and connect</button>
     </form>
   </div>
@@ -183,9 +185,45 @@ const char* kSavedPageHtml = R"HTML(<!DOCTYPE html>
 </html>
 )HTML";
 
+std::string EscapeHtml(const std::string& text) {
+    std::string out;
+    for (const char c : text) {
+        switch (c) {
+            case '&': out += "&amp;"; break;
+            case '<': out += "&lt;"; break;
+            case '>': out += "&gt;"; break;
+            case '"': out += "&quot;"; break;
+            default: out += c;
+        }
+    }
+    return out;
+}
+
+// Puts a saved value into the form field whose tag starts with `field_start`.
+void Prefill(std::string* page, const std::string& field_start, const std::string& value) {
+    const size_t at = page->find(field_start);
+    if (at != std::string::npos && !value.empty()) {
+        page->insert(at + field_start.size(), " value=\"" + EscapeHtml(value) + "\"");
+    }
+}
+
 esp_err_t HandleGetSetupPage(httpd_req_t* request) {
+    // Opened again on a set-up device (Up and Down held at start-up), the form
+    // keeps what's saved, so changing the network needn't mean retyping the
+    // backend's address. The password isn't sent back.
+    std::string page = kSetupPageHtml;
+    const settings_service::Settings saved = settings_service::Get();
+    Prefill(&page, "<input id=\"ssid\" name=\"ssid\"", saved.wifi_ssid);
+    Prefill(&page, "<input id=\"backend_url\" name=\"backend_url\"", saved.backend_url);
+    if (!saved.wifi_password.empty()) {
+        const std::string field = "<input id=\"password\" name=\"password\"";
+        const size_t at = page.find(field);
+        if (at != std::string::npos) {
+            page.insert(at + field.size(), " placeholder=\"Saved; leave blank to keep it\"");
+        }
+    }
     httpd_resp_set_type(request, "text/html");
-    return httpd_resp_send(request, kSetupPageHtml, HTTPD_RESP_USE_STRLEN);
+    return httpd_resp_send(request, page.c_str(), page.size());
 }
 
 esp_err_t HandlePostSave(httpd_req_t* request) {
@@ -201,9 +239,16 @@ esp_err_t HandlePostSave(httpd_req_t* request) {
         received += chunk;
     }
 
-    settings_service::Settings settings = {};
-    settings.wifi_ssid = ExtractField(body, "ssid");
-    settings.wifi_password = ExtractField(body, "password");
+    // Starts from what's saved, so settings the form doesn't show (the sleep
+    // timeout) survive, and a blank password on the same network keeps the
+    // saved one.
+    settings_service::Settings settings = settings_service::Get();
+    const std::string ssid = ExtractField(body, "ssid");
+    const std::string password = ExtractField(body, "password");
+    if (!password.empty() || ssid != settings.wifi_ssid) {
+        settings.wifi_password = password;
+    }
+    settings.wifi_ssid = ssid;
     settings.backend_url = ExtractField(body, "backend_url");
 
     if (settings.wifi_ssid.empty() || settings.backend_url.empty()) {

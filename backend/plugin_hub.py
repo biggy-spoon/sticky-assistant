@@ -52,7 +52,7 @@ def get_index(force: bool = False) -> tuple[list[dict], Optional[str]]:
         return [], str(exc)
 
 
-_PLUGINS_DIR = os.path.join(os.path.dirname(__file__), "plugins")
+_PLUGINS_DIR = plugins.INSTALL_DIR
 _MAX_PLUGIN_BYTES = 200 * 1024
 # A single .py file at a full commit SHA: what the hub reviewed is exactly what
 # gets installed, even if the plugin's branch changes later.
@@ -93,7 +93,7 @@ def install(plugin_id: str, register_routes=None) -> str:
         raise InstallError(f"{plugin_id!r} isn't a usable plugin id")
     path = os.path.join(_PLUGINS_DIR, f"{module_name}.py")
     if os.path.exists(path):
-        raise InstallError(f"A file called {module_name}.py is already in backend/plugins")
+        raise InstallError(f"A file called {module_name}.py is already in {_PLUGINS_DIR}")
     try:
         response = requests.get(entry["download_url"], timeout=15)
         response.raise_for_status()

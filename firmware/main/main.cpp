@@ -5,6 +5,7 @@
 #include "button_service.h"
 #include "captive_portal.h"
 #include "device_nav.h"
+#include "driver/gpio.h"
 #include "epaper_display.h"
 #include "esp_log.h"
 #include "esp_timer.h"
@@ -176,6 +177,42 @@ void PowerTask(void*) {
     }
 }
 
+// Up and Down held together for two seconds at start-up reopen setup, for a new
+// network or password. The buttons pull their pins low when pressed.
+bool SetupRequested() {
+    gpio_config_t buttons = {};
+    buttons.pin_bit_mask = (1ULL << BOARD_BUTTON_UP_PIN) | (1ULL << BOARD_BUTTON_DOWN_PIN);
+    buttons.mode = GPIO_MODE_INPUT;
+    buttons.pull_up_en = GPIO_PULLUP_ENABLE;
+    gpio_config(&buttons);
+    vTaskDelay(pdMS_TO_TICKS(5));
+    for (int i = 0; i < 40; ++i) {
+        if (gpio_get_level(BOARD_BUTTON_UP_PIN) != 0 || gpio_get_level(BOARD_BUTTON_DOWN_PIN) != 0) {
+            return false;
+        }
+        vTaskDelay(pdMS_TO_TICKS(50));
+    }
+    return true;
+}
+
+// While the setup network is up, the screen says what to do with it.
+void ShowSetupScreen(bool first_time) {
+    if (epaper_display::Init() != ESP_OK || ui::Init() != ESP_OK) {
+        return;  // setup still works from a phone, just without instructions
+    }
+    ui::ShowDetail(first_time ? "Welcome to Sticky Assistant" : "WiFi setup",
+                   "1. On your phone or computer, join the WiFi network\n"
+                   "     StickyAssistant-Setup\n"
+                   "2. A setup page opens. If it doesn't, browse to http://192.168.4.1\n"
+                   "3. Enter your WiFi network, its password, and your backend's address, "
+                   "such as http://192.168.1.50:8000/converse\n\n"
+                   "The backend is a small server on a computer at home that does the speech "
+                   "recognition and talks to the AI. To run it, see "
+                   "github.com/biggy-spoon/sticky-assistant",
+                   {0, 0}, false);
+    ui::WaitIdle(10000);
+}
+
 }  // namespace
 
 extern "C" void app_main() {
@@ -191,8 +228,11 @@ extern "C" void app_main() {
 
     ESP_ERROR_CHECK(settings_service::Init());
 
-    if (!settings_service::IsConfigured()) {
-        ESP_LOGI(kTag, "not configured yet, starting setup portal");
+    const bool configured = settings_service::IsConfigured();
+    if (!configured || SetupRequested()) {
+        ESP_LOGI(kTag, "%s, starting setup portal",
+                 configured ? "setup requested" : "not configured yet");
+        ShowSetupScreen(!configured);
         ESP_ERROR_CHECK(captive_portal::Run());
         // Run() only returns on failure to start; the portal itself reboots
         // the device once setup completes. Nothing else to do here.

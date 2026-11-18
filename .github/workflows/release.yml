@@ -1,0 +1,49 @@
+# Builds the firmware for a version tag and attaches it to a draft GitHub
+# release: the three parts, the Playground's manifest.json, the merged image
+# for the Playground's website form, and a zip of the lot. Publish the draft
+# once it looks right.
+#
+#   git tag v1.0.0 && git push origin v1.0.0
+name: Release
+
+on:
+  push:
+    tags: ["v[0-9]+.[0-9]+.[0-9]+*"]
+
+permissions:
+  contents: write
+
+jobs:
+  firmware:
+    name: Firmware release
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Version from the tag
+        # ESP-IDF reads version.txt as the app version the device reports.
+        run: echo "${GITHUB_REF_NAME#v}" > firmware/version.txt
+      - name: Check it builds with the bundled fonts only
+        # Custom fonts (make_fonts.sh) are git-ignored and may not be
+        # redistributable; a release must never contain one.
+        run: test ! -e firmware/components/ui/fonts/custom/name.txt
+      - name: Build with ESP-IDF
+        uses: espressif/esp-idf-ci-action@v1
+        with:
+          esp_idf_version: v5.3
+          target: esp32s3
+          path: "firmware"
+          command: idf.py build && cd build && esptool.py --chip esp32s3 merge_bin -o merged.bin @flash_args
+      - name: Package
+        run: |
+          python3 scripts/package_release.py "$GITHUB_REF_NAME" --build firmware/build --out dist
+          version="${GITHUB_REF_NAME#v}"
+          (cd dist && zip -r "sticky-assistant-$version.zip" "$version")
+      - uses: softprops/action-gh-release@v2
+        with:
+          draft: true
+          prerelease: ${{ contains(github.ref_name, '-') }}
+          generate_release_notes: true
+          files: |
+            dist/*/*.bin
+            dist/*/manifest.json
+            dist/*.zip

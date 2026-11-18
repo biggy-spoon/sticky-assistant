@@ -23,10 +23,18 @@ on RAM.
 
 ## Run with Docker
 
+From the repository root:
+
 ```bash
-docker build -t sticky-assistant-backend .
-docker run -p 8000:8000 --env-file .env sticky-assistant-backend
+cp backend/.env.example backend/.env   # optional: API keys can also be set on the device
+docker compose up -d
 ```
+
+Then set the device's backend to `http://<this computer's IP>:8000/converse`
+(the device's setup network asks for it on first start). Everything worth
+keeping lives in the `sticky-assistant-data` volume, mounted at `/data`: the
+database, plugins installed from the hub (`PLUGINS_DIR`) and the speech model
+(`HF_HOME`), so `docker compose up -d --build` after a `git pull` keeps them.
 
 ## Settings page
 
