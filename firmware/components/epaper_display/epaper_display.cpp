@@ -300,6 +300,39 @@ esp_err_t InitPartial() {
     return SetCursor(0, BOARD_EPD_HEIGHT - 1);
 }
 
+// The fast waveform leaves black pixels grey. A second pass with an all-white
+// "previous" plane drives every black pixel again, as if it had just turned
+// black, while white pixels see white-to-white and are left alone.
+esp_err_t DarkenPass() {
+    static const uint8_t kWhite[512] = {
+#define W8 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF
+#define W64 W8, W8, W8, W8, W8, W8, W8, W8
+        W64, W64, W64, W64, W64, W64, W64, W64
+#undef W64
+#undef W8
+    };
+    esp_err_t err = SetCursor(0, BOARD_EPD_HEIGHT - 1);
+    if (err != ESP_OK) return err;
+    err = SendCommand(kCmdWriteRamOld);
+    if (err != ESP_OK) return err;
+    for (size_t sent = 0; sent < BOARD_EPD_BUFFER_LEN; sent += sizeof(kWhite)) {
+        err = SendData(kWhite, std::min(sizeof(kWhite), BOARD_EPD_BUFFER_LEN - sent));
+        if (err != ESP_OK) return err;
+    }
+    err = SetCursor(0, BOARD_EPD_HEIGHT - 1);
+    if (err != ESP_OK) return err;
+    err = SendCommand(kCmdWriteRamNew);
+    if (err != ESP_OK) return err;
+    err = SendData(s_framebuffer, BOARD_EPD_BUFFER_LEN);
+    if (err != ESP_OK) return err;
+    err = SendCommandWithData(kCmdDisplayUpdateControl2, &kDisplayUpdateCtrl2Partial, 1);
+    if (err != ESP_OK) return err;
+    err = SendCommand(kCmdMasterActivate);
+    if (err != ESP_OK) return err;
+    WaitWhileBusy();
+    return ESP_OK;
+}
+
 esp_err_t PartialRefresh() {
     esp_err_t err = InitPartial();
     if (err != ESP_OK) {
@@ -322,7 +355,7 @@ esp_err_t PartialRefresh() {
     if (err != ESP_OK) return err;
     WaitWhileBusy();
     s_analog_on = true;
-    return ESP_OK;
+    return DarkenPass();
 }
 
 }  // namespace
@@ -413,11 +446,15 @@ esp_err_t FullRefresh() {
     return err;
 }
 
-esp_err_t Refresh(bool full) {
+esp_err_t Refresh(bool full, bool* did_full) {
     if (s_framebuffer == nullptr || s_spi == nullptr) {
         return ESP_ERR_INVALID_STATE;
     }
-    if (full || !s_baseline_valid) {
+    const bool run_full = full || !s_baseline_valid;
+    if (did_full != nullptr) {
+        *did_full = run_full;
+    }
+    if (run_full) {
         return FullRefresh();
     }
     const esp_err_t err = PartialRefresh();

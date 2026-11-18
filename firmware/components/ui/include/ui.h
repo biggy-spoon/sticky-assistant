@@ -84,6 +84,10 @@ void ShowAgenda(const std::string& title, const std::vector<AgendaItem>& items, 
 // with_back shows a back arrow and makes a tap anywhere below the bar go back.
 void ShowDetail(const std::string& title, const std::string& body, PagePos page, bool with_back);
 
+// Redraws the screen showing with a full refresh, clearing any ghosts the
+// partial refreshes have left.
+void CleanScreen();
+
 // Moves a scrolling screen by about a page: +1 towards later content, -1
 // towards earlier. Ignored while a refresh is pending or running, and at either
 // end, so it never costs a refresh that changes nothing.

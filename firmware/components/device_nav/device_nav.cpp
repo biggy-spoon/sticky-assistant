@@ -732,6 +732,8 @@ void OnBack() {
     } else if (s_page != kHomePage || s_transient_shown) {
         s_page = kHomePage;
         RenderCurrentLocked(false);
+    } else {
+        ui::CleanScreen();  // already home: give it a clean full refresh
     }
     Unlock();
 }

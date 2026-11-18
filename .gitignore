@@ -14,3 +14,6 @@ backend/*.db
 
 # OS
 .DS_Store
+
+# Fonts made by firmware/tools/make_fonts.sh from your own font files
+firmware/components/ui/fonts/custom/

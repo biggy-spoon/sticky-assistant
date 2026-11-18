@@ -22,6 +22,9 @@ constexpr uint32_t kReadIntervalMs = 30 * 1000;
 constexpr uint32_t kI2cHz = 100000;
 constexpr int kI2cTimeoutMs = 50;
 constexpr uint8_t kGaugeStateOfCharge = 0x2C;  // BQ27220 standard command, percent
+// The gauge misses the odd request. The last good reading stands until this
+// many in a row fail, so one hiccup doesn't blank the status bar.
+constexpr int kFailuresBeforeUnknown = 4;
 
 constexpr gpio_num_t kButtons[] = {BOARD_BUTTON_AI_PIN, BOARD_BUTTON_UP_PIN,
                                    BOARD_BUTTON_DOWN_PIN};
@@ -30,6 +33,7 @@ i2c_master_bus_handle_t s_bus = nullptr;
 i2c_master_dev_handle_t s_gauge = nullptr;
 SemaphoreHandle_t s_lock = nullptr;
 Status s_status;
+int s_failures = 0;
 std::atomic<int64_t> s_last_activity_us{0};
 
 void HoldAt(gpio_num_t pin, int level) {
@@ -57,12 +61,22 @@ bool ReadPercent(int* percent) {
 }
 
 void ReadStatus() {
-    Status status;
-    status.usb_power = gpio_get_level(BOARD_USB_POWER_PIN) == 1;
-    status.battery_known = ReadPercent(&status.percent);
+    int percent = 0;
+    const bool read = ReadPercent(&percent);
     xSemaphoreTake(s_lock, portMAX_DELAY);
-    s_status = status;
+    s_status.usb_power = gpio_get_level(BOARD_USB_POWER_PIN) == 1;
+    if (read) {
+        s_failures = 0;
+        s_status.battery_known = true;
+        s_status.percent = percent;
+    } else if (++s_failures >= kFailuresBeforeUnknown) {
+        s_status.battery_known = false;
+    }
+    const int failures = s_failures;
     xSemaphoreGive(s_lock);
+    if (!read) {
+        ESP_LOGW(kTag, "battery read failed (%d in a row)", failures);
+    }
 }
 
 void PowerTask(void*) {

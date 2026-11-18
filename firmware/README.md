@@ -13,7 +13,8 @@ tile, swipe left or right, or press Up/Down to move between pages, and tap the
 status bar to go home. Swipe up or down to scroll. Tap a checkable row to toggle
 it (e.g. a todo), or a row with details to open them (e.g. a calendar event). A
 short press of the AI button goes back: from details to the list, and from any
-other page to home.
+other page to home. On home it redraws the screen with a full refresh, which
+clears any faint traces the quick partial updates leave behind.
 
 After 5 minutes with no touch or button press, the current screen is drawn once
 more with a moon in the status bar and the board goes into deep sleep. Any
@@ -64,6 +65,26 @@ and reboots into normal operation.
 | `epaper_display` | SPI transport + SSD1677 command set + 1bpp framebuffer, full and partial refresh, panel sleep |
 | `ui` | LVGL screens in Sticky OS's style, rendered via `epaper_display`. Its own task owns LVGL and the panel, so `Show*` calls never block; if several arrive during a refresh, only the newest is drawn. LVGL's heap is 128KB in PSRAM |
 | `main` | Wires button hold → record → upload → display, buttons and gestures → `device_nav`, and first-run routing |
+
+## Using your own font
+
+The device uses Liberation Sans by default. To use another typeface, give
+`tools/make_fonts.sh` a regular and a bold TrueType file:
+
+```sh
+tools/make_fonts.sh ~/Fonts/MyFont-Regular.ttf ~/Fonts/MyFont-Bold.ttf
+idf.py build flash
+```
+
+It writes the UI's seven sizes to `components/ui/fonts/custom/`, and the build
+uses them whenever that folder exists. The folder is ignored by git, so a font
+licensed only for your own devices never ends up in the repository. Delete the
+folder to go back to Liberation Sans. Icons and drawings are shapes, not
+characters, so they don't change. It needs Node.js for `npx lv_font_conv`, and
+one `idf.py build` beforehand so LVGL's sources are downloaded.
+
+Only printable ASCII, the degree sign and the bullet are taken from the font.
+A serif or wider font takes more room, so check long titles after switching.
 
 ## Known gaps
 

@@ -45,9 +45,11 @@ constexpr lv_coord_t kFooterH = 34;
 constexpr lv_coord_t kPageOverlap = 30;  // text kept on screen when paging through it
 constexpr int kPageDotCount = 3;
 
-// Partial refreshes leave faint ghosts. Each one a person caused costs 5, a
-// clock tick costs 1, and at 60 the next refresh is a full one (Sticky OS's
-// budget): about every 12 screens in use, or hourly when left alone.
+// Partial refreshes leave ghosts, and replacing a whole page leaves a lot of
+// them, so a change of page or a scroll is always a full refresh. Updates
+// within a screen (a ticked row, the clock, the steps of a conversation) are
+// partial. Each of those a person caused costs 5, a clock tick costs 1, and at
+// 60 the next refresh is a full one anyway (Sticky OS's budget).
 constexpr int kGhostBudget = 60;
 constexpr int kGhostCostUser = 5;
 constexpr int kGhostCostTick = 1;
@@ -94,6 +96,8 @@ int64_t s_last_minute = -1;
 // UI task only.
 int s_ghost = 0;
 bool s_cheap_refresh = false;
+bool s_force_full = false;
+std::string s_screen_key;  // which page is on the glass, to tell a new page from an update
 lv_obj_t* s_screen = nullptr;
 std::vector<void*> s_screen_buffers;    // canvas buffers of the screen on the glass
 std::vector<void*> s_building_buffers;  // ... and of the one being built
@@ -392,7 +396,8 @@ void Text(lv_obj_t* c, int x, int y, const lv_font_t* font, const char* text, bo
     lv_draw_label_dsc_init(&dsc);
     dsc.font = font;
     dsc.color = Ink(ink);
-    lv_canvas_draw_text(c, x, y, TextWidth(font, text) + 2, &dsc, text);
+    // Room to spare: a box exactly the measured width can wrap the last glyph.
+    lv_canvas_draw_text(c, x, y, TextWidth(font, text) + 16, &dsc, text);
 }
 
 // --- icons (shapes and proportions from Sticky OS) ------------------------
@@ -740,8 +745,11 @@ void UpdateTargets() {
 
 // --- presenting -------------------------------------------------------------
 
-// Loads a finished screen, frees the one it replaces, and refreshes the panel.
-void Present(lv_obj_t* screen) {
+// Loads a finished screen, frees the one it replaces, and refreshes the panel:
+// fully if it's a different page (key) from the one showing.
+void Present(lv_obj_t* screen, const std::string& key) {
+    s_force_full = key != s_screen_key;
+    s_screen_key = key;
     lv_obj_update_layout(screen);
     UpdateFooter();
     UpdateTargets();
@@ -759,6 +767,7 @@ void Present(lv_obj_t* screen) {
         heap_caps_free(buffer);
     }
     lv_refr_now(nullptr);
+    s_force_full = false;
 
     lv_mem_monitor_t mem;
     lv_mem_monitor(&mem);
@@ -920,7 +929,7 @@ void RenderHome(const HomeInfo& info, PagePos page) {
     for (size_t i = 0; i < info.tiles.size() && i < 8; ++i) {
         DrawTile(screen, info.tiles[i], static_cast<int>(i), kGridTop + 8);
     }
-    Present(screen);
+    Present(screen, "home");
 }
 
 // --- Claude -------------------------------------------------------------------
@@ -932,7 +941,7 @@ void RenderClaude(const std::string& transcript, const std::string& reply, PageP
     if (transcript.empty()) {
         Message(screen, "Ask Claude anything",
                 "Hold the top button while you speak, then let go.");
-        Present(screen);
+        Present(screen, "claude");
         return;
     }
     lv_obj_t* area = ScrollArea(screen, kGutter, kBarH + 14, kW - 2 * kGutter, ScrollKind::kText);
@@ -945,7 +954,7 @@ void RenderClaude(const std::string& transcript, const std::string& reply, PageP
     Label(area, &sticky_bold_18, "CLAUDE", LV_LABEL_LONG_CLIP);
     Label(area, &sticky_sans_24, reply, LV_LABEL_LONG_WRAP, kW - 2 * kGutter);
     RestoreScroll("claude", false);
-    Present(screen);
+    Present(screen, "claude");
 }
 
 void RenderMessage(const std::string& bar_title, const std::string& title, const std::string& detail,
@@ -953,7 +962,7 @@ void RenderMessage(const std::string& bar_title, const std::string& title, const
     lv_obj_t* screen = NewScreen();
     BuildBar(screen, bar_title, true, page);
     Message(screen, title, detail);
-    Present(screen);
+    Present(screen, bar_title == "Claude" ? "claude" : "message:" + bar_title);
 }
 
 // --- lists (Sticky OS's Notes) ----------------------------------------------------
@@ -1031,7 +1040,7 @@ void RenderList(const std::string& title, const std::vector<ListRow>& rows, Page
         lv_obj_set_style_pad_top(empty, 24, 0);
     }
     RestoreScroll("list:" + title, keep_scroll);
-    Present(screen);
+    Present(screen, "list:" + title);
 }
 
 // --- agenda (Sticky OS's Calendar) ------------------------------------------------
@@ -1250,7 +1259,7 @@ void RenderAgenda(const std::string& title, const std::vector<AgendaItem>& items
         Label(area, &sticky_sans_24, "Nothing in the next 30 days", LV_LABEL_LONG_CLIP);
     }
     RestoreScroll("agenda:" + title, keep_scroll);
-    Present(screen);
+    Present(screen, "agenda:" + title);
 }
 
 // --- details ------------------------------------------------------------------
@@ -1283,7 +1292,7 @@ void RenderDetail(const std::string& title, const std::string& body, PagePos pag
         AddTarget(body_target, HitKind::kBody, -1);
     }
     RestoreScroll("detail:" + title, false);
-    Present(screen);
+    Present(screen, "detail:" + title);
 }
 
 // --- the UI task ----------------------------------------------------------------
@@ -1317,9 +1326,9 @@ void FlushCb(lv_disp_drv_t* disp_drv, const lv_area_t* area, lv_color_t* color_p
         }
     }
     s_ghost += s_cheap_refresh ? kGhostCostTick : kGhostCostUser;
-    const bool full = s_ghost > kGhostBudget;
     const int64_t started = esp_timer_get_time();
-    const esp_err_t err = epaper_display::Refresh(full);
+    bool full = false;
+    const esp_err_t err = epaper_display::Refresh(s_force_full || s_ghost > kGhostBudget, &full);
     if (full) {
         s_ghost = 0;
     }
@@ -1499,6 +1508,21 @@ void ShowDetail(const std::string& title, const std::string& body, PagePos page,
     Post([title, body, page, with_back] { RenderDetail(title, body, page, with_back); });
 }
 
+void CleanScreen() {
+    Post([] {
+        if (s_screen == nullptr) {
+            return;
+        }
+        UpdateBarTime();
+        DrawBarRight();
+        UpdateHomeClock();
+        lv_obj_invalidate(s_screen);
+        s_force_full = true;
+        lv_refr_now(nullptr);
+        s_force_full = false;
+    });
+}
+
 void Scroll(int direction) {
     if (IsBusy()) {
         return;
@@ -1516,7 +1540,9 @@ void Scroll(int direction) {
         s_saved_scroll = target;
         UpdateFooter();
         UpdateTargets();
+        s_force_full = true;  // every line moves, which ghosts as badly as a new page
         lv_refr_now(nullptr);
+        s_force_full = false;
     });
 }
 

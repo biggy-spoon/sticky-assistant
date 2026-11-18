@@ -48,7 +48,7 @@ void OnScroll(int direction);
 void OnTap(int x, int y);
 
 // A short press of the AI button: details go back to their list, any other
-// page goes home.
+// page goes home, and on home it redraws with a full refresh to clear ghosts.
 void OnBack();
 
 // True when nothing is in progress that sleeping would cut short.

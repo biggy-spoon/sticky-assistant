@@ -33,7 +33,8 @@ esp_err_t FullRefresh();
 // under a second, no flash, only the changed pixels). A partial refresh falls
 // back to a full one until a full refresh has set a baseline. Partial refreshes
 // leave faint ghosts that build up, so the caller should mix in full ones.
-esp_err_t Refresh(bool full);
+// did_full, if given, reports whether a full refresh actually ran.
+esp_err_t Refresh(bool full, bool* did_full = nullptr);
 
 // Puts the panel's controller into deep sleep. The picture stays on the glass
 // with no power. The next refresh after this is a full one.
